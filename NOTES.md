@@ -32,6 +32,12 @@ Decisions and deviations from `PLAN.md`, plus checks that need a real device.
 - **"added X" where X is already in the recipe** (and X has no amount) becomes "more X" (×1.25).
 - **Edit summaries** show amounts where known: "Less soy sauce: 2 tbsp → 1 ½ tbsp".
 
+- **DESIGN.md was added mid-build** (owner request, arrived during M4). It is committed with M4, the first milestone that uses it. All colour tokens are colour sets in `App/Assets.xcassets/Mise/` (light + dark), exposed as `Color.mise.*`; spacing, radii, fonts and the shared components (`MiseCard`, `SectionCard`, `RecipeCard`, `Chip`/`ChipGroup`, `PrimaryButton`/`SecondaryButton` + button styles, `Badge`, `ReviewCard`, `EmptyState`, `PageDots`, `FlowLayout`) live in `App/Theme/`. `AccentColor` and `LaunchBackground` mirror the `accent` and `background` tokens.
+- **Contrast (checked with a script against the hex values):** every text/fill pair in the spec passes 4.5:1 except `accent` text on `surfaceSunken` in light mode (4.37:1), which the spec prescribes for secondary buttons; their label is 17pt semibold, which qualifies as large text (3:1). Badges use a 12% tint fill instead of the spec's 15% so `herb` text on it reaches 4.65:1 (15% gives 4.46:1).
+- **Preference controls are chips everywhere** (diet, avoid, spice level, cuisines, weeknight time), in onboarding and Settings, instead of a Picker/Slider, so both screens share one set of editors. Household size is a system Stepper.
+- **Onboarding keeps the plan's 4 pages** (diet + avoid; dislikes + heat; cuisines + time + household; pantry), so a page can hold two or three short questions rather than strictly one.
+- **Pantry "cards"** are inset-grouped List sections with `surface` rows on the cream background, which keeps native swipe actions; Have/Missing headers are serif.
+
 ## Manual checks (owner, on a device)
 
 (filled in as milestones land)
