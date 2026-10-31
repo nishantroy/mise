@@ -192,18 +192,27 @@ struct PrepPlannerTests {
         - Julienne 1 carrot
         - Cut 3 green onions into 5cm/2" pieces
         Mix ahead
-        - Mix together 2 tsp cornflour / cornstarch and 1 ½ tbsp soy sauce (all purpose or light)
+        - Mix together 2 tsp cornflour / cornstarch, 1 ½ tbsp soy sauce (all purpose or light), 1 ½ tbsp oyster sauce (sub Hoisin), 1 ½ tbsp Chinese cooking wine (or Mirin), 2 tsp sugar (reduce to 1 tsp if using Mirin), ½ tsp sesame oil and White pepper (sub black)
         Get out
         - 1 ½ tbsp peanut oil (or other cooking oil)
         - 200 g chow mein noodles
         - 1 ½ cups bean sprouts
         - ¼ cup water
-        - 1 ½ tbsp oyster sauce (sub Hoisin)
-        - 1 ½ tbsp Chinese cooking wine (or Mirin)
-        - 2 tsp sugar (reduce to 1 tsp if using Mirin)
-        - ½ tsp sesame oil
-        - White pepper (sub black)
         """)
+    }
+
+    /// "…then mix in remaining ingredients": the unnamed lines next to the named ones that no
+    /// step mentions join the mix; a garnish further down (past a mentioned line) doesn't.
+    @Test func remainingIngredientsJoinTheMix() {
+        let r = recipe(["2 tsp cornstarch", "1 tbsp soy sauce", "1 tbsp oyster sauce", "1 tsp sugar", "200 g chicken", "1 tbsp oil",
+                        "cilantro, to serve"],
+                       steps: ["Mix together the cornstarch and soy sauce, then mix in the remaining ingredients.",
+                               "Heat the oil and fry the chicken for 5 minutes.",
+                               "Pour in the sauce and serve."])
+        let plan = PrepPlanner().plan(for: r)
+        #expect(plan.group(.mixAhead)?.items.map { $0.text(in: r) }
+            == ["Mix together 2 tsp cornstarch, 1 tbsp soy sauce, 1 tbsp oyster sauce and 1 tsp sugar"])
+        #expect(plan.group(.getOut)?.items.map { $0.text(in: r) } == ["200 g chicken", "1 tbsp oil", "Cilantro (to serve)"])
     }
 
     @Test func mongolianBeefPlan() throws {

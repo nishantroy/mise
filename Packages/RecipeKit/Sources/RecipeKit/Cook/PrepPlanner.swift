@@ -255,8 +255,15 @@ public struct PrepPlanner: Sendable {
         for s in texts.indices where s < firstHeat {
             let stepLinks = links.steps[s]
             guard stepLinks.count >= 2 else { continue }
-            let ids = stepLinks.filter { !covered.contains($0) }
+            var ids = stepLinks.filter { !covered.contains($0) }
             guard !ids.isEmpty, let shape = Self.mixShape(masked[s]) else { continue }
+            // "…then mix in the remaining ingredients": the unnamed ones are the lines listed next
+            // to the named ones that no step mentions (a sauce block in the ingredient list).
+            if Self.mentionsRemaining(masked[s]) {
+                let extra = Self.adjacentUnmentioned(to: stepLinks, in: recipe, unmentioned: Set(links.unmentioned), covered: covered)
+                let all = Set(ids).union(extra)
+                ids = recipe.ingredients.map(\.id).filter { all.contains($0) }
+            }
             covered.formUnion(ids)
             mix.append(PrepItem(id: "mix.\(mix.count)", action: shape.action, ingredientIDs: ids,
                                 details: details.filter { ids.contains($0.key) }, suffix: shape.suffix, step: s))
@@ -464,6 +471,28 @@ public struct PrepPlanner: Sendable {
         }
         if let mixes { return (RecipeFormatText.capitalisedFirst(mixes), nil) }
         return ("Put", container.map { "in a \($0)" })
+    }
+
+    /// "mix in (the) remaining ingredients", "add the other sauce ingredients", "the rest of the ingredients".
+    static func mentionsRemaining(_ masked: String) -> Bool {
+        Rx.test("\\b(?:remaining|other|rest of the)\\s+(?:sauce\\s+)?ingredients\\b", masked)
+    }
+
+    /// Ingredient lines next to `named` in the recipe's list (either direction, through each
+    /// other) that no step mentions and nothing has claimed yet. Stops at the first line that
+    /// fails, so a garnish further down the list isn't swept in.
+    static func adjacentUnmentioned(to named: [UUID], in recipe: Recipe, unmentioned: Set<UUID>, covered: Set<UUID>) -> [UUID] {
+        let ids = recipe.ingredients.map(\.id)
+        let namedSet = Set(named)
+        let positions = ids.indices.filter { namedSet.contains(ids[$0]) }
+        guard let first = positions.min(), let last = positions.max() else { return [] }
+        func eligible(_ i: Int) -> Bool { unmentioned.contains(ids[i]) && !covered.contains(ids[i]) }
+        var out: [UUID] = []
+        var i = last + 1
+        while i < ids.count, eligible(i) { out.append(ids[i]); i += 1 }
+        i = first - 1
+        while i >= 0, eligible(i) { out.append(ids[i]); i -= 1 }
+        return out
     }
 
     /// Steps that cook: heat, fry, sauté, simmer, boil, bake, roast, grill, sear, broil, cook.
