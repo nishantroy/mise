@@ -145,19 +145,8 @@ public struct FeedbackParser: Sendable {
     // MARK: Builders
 
     func replacement(new: String, old: String, recipe: Recipe) -> [RecipeEdit] {
-        guard let original = findIngredient(old, in: recipe) else { return [] }
-        let parsed = IngredientLineParser.parse(Self.stripArticles(new))
-        guard !parsed.name.isEmpty else { return [] }
-        // Keep the original amount unless the user gave one.
-        let hasOwnAmount = parsed.quantity != nil
-        let replacement = catalog.annotate(Ingredient(
-            raw: "",
-            quantity: hasOwnAmount ? parsed.quantity : original.quantity,
-            unit: hasOwnAmount ? parsed.unit : original.unit,
-            name: parsed.name, note: parsed.note))
-        var final = replacement
-        final.raw = final.displayText
-        return [.replaceIngredient(id: original.id, with: [final], reason: "Used \(parsed.name) instead of \(original.name)")]
+        guard let original = findIngredient(old, in: recipe), let edit = replace(original, with: new) else { return [] }
+        return [edit]
     }
 
     func removals(_ text: String, recipe: Recipe) -> [RecipeEdit] {
@@ -192,8 +181,29 @@ public struct FeedbackParser: Sendable {
         return edits
     }
 
+    /// Replaces `original` with an ingredient parsed from `text` ("chicken thighs", "1 tbsp lime juice"),
+    /// keeping the original amount unless `text` gives one. Nil if `text` has no name.
+    public func replace(_ original: Ingredient, with text: String) -> RecipeEdit? {
+        let parsed = IngredientLineParser.parse(Self.stripArticles(text))
+        guard !parsed.name.isEmpty, parsed.name.lowercased() != original.name.lowercased() else { return nil }
+        let hasOwnAmount = parsed.quantity != nil
+        var replacement = catalog.annotate(Ingredient(
+            raw: "",
+            quantity: hasOwnAmount ? parsed.quantity : original.quantity,
+            unit: hasOwnAmount ? parsed.unit : original.unit,
+            name: parsed.name, note: parsed.note))
+        replacement.raw = replacement.displayText
+        return .replaceIngredient(id: original.id, with: [replacement], reason: "Used \(parsed.name) instead of \(original.name)")
+    }
+
+    /// A new ingredient parsed from free text, matched to the catalog.
+    public func newIngredient(_ text: String) -> Ingredient? {
+        let parsed = catalog.annotate(IngredientLineParser.parse(Self.stripArticles(text)))
+        return parsed.name.isEmpty ? nil : parsed
+    }
+
     /// Amendment: scaling an ingredient without a quantity becomes a note instead of a no-op.
-    func scale(_ ingredient: Ingredient, factor: Double) -> RecipeEdit {
+    public func scale(_ ingredient: Ingredient, factor: Double) -> RecipeEdit {
         if ingredient.quantity == nil {
             let word = factor < 1 ? "less" : "more"
             return .addNote("Use \(word) \(ingredient.name.lowercased()) than last time")

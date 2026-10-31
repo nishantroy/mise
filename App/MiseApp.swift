@@ -40,6 +40,8 @@ struct RootView: View {
 
 struct MainTabView: View {
     @Environment(AppRouter.self) private var router
+    @Environment(AssistantProvider.self) private var provider
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         @Bindable var router = router
@@ -47,6 +49,9 @@ struct MainTabView: View {
             Tab("Recipes", systemImage: "book", value: AppTab.recipes) { RecipeListView() }
             Tab("Pantry", systemImage: "cabinet", value: AppTab.pantry) { PantryView() }
             Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView() }
+        }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active { provider.refresh() }
         }
         .sheet(item: $router.activeImport, onDismiss: { router.importSheetDismissed() }) { request in
             NavigationStack {

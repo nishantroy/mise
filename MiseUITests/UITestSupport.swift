@@ -2,8 +2,8 @@ import XCTest
 
 extension XCUIApplication {
     /// Launches with a fresh store (fresh-install behaviour) unless `reset` is false.
-    func launchForTesting(reset: Bool = true, extra: [String] = [], environment: [String: String] = [:]) {
-        launchArguments = ["-uiTesting", "-forceRules"] + (reset ? ["-resetData"] : []) + extra
+    func launchForTesting(reset: Bool = true, forceRules: Bool = true, extra: [String] = [], environment: [String: String] = [:]) {
+        launchArguments = ["-uiTesting"] + (forceRules ? ["-forceRules"] : []) + (reset ? ["-resetData"] : []) + extra
         launchEnvironment = environment
         launch()
     }
@@ -87,7 +87,8 @@ extension XCUIApplication {
     func scrollTo(_ element: XCUIElement, maxSwipes: Int = 12) {
         var swipes = 0
         while !(element.exists && element.isHittable) && swipes < maxSwipes {
-            scrollViews.firstMatch.swipeUp()
+            let container = scrollViews.firstMatch.exists ? scrollViews.firstMatch : collectionViews.firstMatch
+            container.swipeUp()
             swipes += 1
         }
     }

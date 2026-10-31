@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Which assistant is active, and the "use rules only" toggle.
+/// Which assistant is active (and why), plus the "use rules only" toggle.
 struct AssistantSettingsSection: View {
     @Environment(AssistantProvider.self) private var provider
 
@@ -13,6 +13,9 @@ struct AssistantSettingsSection: View {
                 .accessibilityIdentifier("settings.forceRules")
         } header: {
             Text("Assistant")
+        } footer: {
+            Text(provider.statusDetail)
+                .accessibilityIdentifier("settings.assistantStatus")
         }
     }
 }
