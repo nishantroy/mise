@@ -59,14 +59,16 @@ final class CookModeUITests: XCTestCase {
         let allow = springboard.buttons["Allow"]
         if allow.waitForExistence(timeout: 4) { allow.tap() }
 
-        let bar = app.descendants(matching: .any)["cook.timerBar"]
-        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["cook.timer.0"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["cook.timer.0"].label, "Stop 10 min timer")
+        // The step's own row shows it, so the strip stays hidden on this page...
+        let bar = app.descendants(matching: .any)["cook.timerBar"]
+        XCTAssertFalse(bar.exists)
 
-        // The bar stays visible on other pages.
+        // ...and appears once you move on.
         app.buttons["cook.next"].tap()
         XCTAssertEqual(app.staticTexts["cook.pageTitle"].label, "Step 4 of 11")
-        XCTAssertTrue(bar.exists)
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
 
         // On to the last step; Done (with a timer running, after confirming) opens "I made this".
         var taps = 0

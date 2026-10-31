@@ -40,7 +40,7 @@ struct CookModeView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if !timers.timers.isEmpty { timerBar }
+            if !stripTimers.isEmpty { timerBar }
             ZStack {
                 pageView(page)
                     .id(page)
@@ -363,10 +363,16 @@ struct CookModeView: View {
 
     // MARK: Timers
 
+    /// Timers from other steps, plus finished ones: the current step's running timers already
+    /// have their own rows on the page.
+    private var stripTimers: [CookTimerStore.RunningTimer] {
+        timers.timers.filter { $0.finished || $0.step + 1 != page }
+    }
+
     private var timerBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Theme.Spacing.xs) {
-                ForEach(timers.timers) { timer in
+                ForEach(stripTimers) { timer in
                     HStack(spacing: Theme.Spacing.xxs) {
                         Button { go(to: timer.step + 1) } label: {
                             HStack(spacing: Theme.Spacing.xxs) {
