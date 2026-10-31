@@ -77,6 +77,19 @@ enum StubPages {
 
     /// Wikibooks Kung Pao Chicken: no JSON-LD, no stated time, no cuisine.
     static let kungPao = "https://example.test/kung-pao-chicken"
+    /// The Woks of Life Shortcut Mongolian Ground Beef: the original for "Paste my version".
+    static let mongolianBeef = "https://example.test/shortcut-mongolian-ground-beef"
+
+    /// The owner's own write-up of the Mongolian beef (fixture `mongolian-beef-my-version.txt`).
+    static var myVersionText: String {
+        let bundle = Bundle(for: BundleToken.self)
+        guard let url = bundle.url(forResource: "mongolian-beef-my-version", withExtension: "txt", subdirectory: "Fixtures"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else {
+            XCTFail("missing fixture mongolian-beef-my-version.txt")
+            return ""
+        }
+        return text
+    }
 
     /// Launch environment serving fixture HTML for the stub URLs.
     static func environment() -> [String: String] {
@@ -93,6 +106,7 @@ enum StubPages {
             porkBelly: html("woksoflife-red-braised-pork-belly"),
             chowMein: html("recipetineats-chow-mein"),
             kungPao: html("wikibooks-kung-pao-chicken"),
+            mongolianBeef: html("woksoflife-shortcut-mongolian-ground-beef"),
             notARecipe: "<html><head><title>Hello</title></head><body><p>No recipe here.</p></body></html>",
             twiceWine: """
             <html><head><script type="application/ld+json">

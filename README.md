@@ -37,7 +37,7 @@ Run `xcodegen generate` again whenever you add or remove files or edit `project.
 # Logic (fast, no simulator)
 cd Packages/RecipeKit && swift test
 
-# UI tests (onboarding, import, ingredient check, adjust, assistant, share queue)
+# UI tests (onboarding, import, ingredient check, adjust, paste my version, assistant, share queue)
 xcodebuild test -project Mise.xcodeproj -scheme Mise \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   -derivedDataPath build/DerivedData

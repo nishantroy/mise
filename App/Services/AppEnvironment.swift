@@ -27,10 +27,12 @@ enum LaunchOptions {
         return URL(string: arguments[i + 1])
     }
 
-    /// `-enqueueText <text>`: append shared text to the queue at launch, as the extension would.
+    /// `-enqueueTextBase64 <base64 UTF-8>`: append shared text to the queue at launch, as the
+    /// extension would. Base64 because multi-line launch arguments don't survive intact.
     static var enqueueText: String? {
-        guard let i = arguments.firstIndex(of: "-enqueueText"), i + 1 < arguments.count else { return nil }
-        return arguments[i + 1]
+        guard let i = arguments.firstIndex(of: "-enqueueTextBase64"), i + 1 < arguments.count,
+              let data = Data(base64Encoded: arguments[i + 1]) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }
 
