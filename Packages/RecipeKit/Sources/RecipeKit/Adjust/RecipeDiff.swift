@@ -184,24 +184,29 @@ public struct RecipeDiff: Hashable, Sendable {
 
     // MARK: Pantry
 
-    /// Swapped-out ingredients → missing (unless the user's version still uses them); specialty
-    /// or rare ingredients in the user's version, and any currently marked missing → have.
-    /// Changes the pantry already reflects are left out.
+    /// Swapped-out specialty or rare ingredients → missing (unless the user's version still uses
+    /// them); specialty or rare ingredients in the user's version, and any currently marked
+    /// missing → have. Staples and common items are left alone either way: swapping fresh ginger
+    /// and garlic for a paste doesn't mean they're out of garlic. Changes the pantry already
+    /// reflects are left out.
     static func pantryUpdates(swappedOut: [Ingredient], mine: Recipe, pantry: PantrySnapshot,
                               catalog: IngredientCatalog) -> [PantryUpdate] {
         let mineKeys = Set(mine.ingredients.map(catalog.pantryKey))
         var out: [PantryUpdate] = []
         var seen: Set<String> = []
+        func isSpecialty(_ key: String) -> Bool {
+            let commonness = catalog.entry(id: key)?.commonness
+            return commonness == .specialty || commonness == .rare
+        }
         for old in swappedOut {
             let key = catalog.pantryKey(for: old)
-            guard !mineKeys.contains(key), !pantry.missing.contains(key), seen.insert(key).inserted else { continue }
+            guard isSpecialty(key), !mineKeys.contains(key), !pantry.missing.contains(key), !pantry.have.contains(key),
+                  seen.insert(key).inserted else { continue }
             out.append(PantryUpdate(key: key, displayName: old.name, status: .missing))
         }
         for ing in mine.ingredients {
             let key = catalog.pantryKey(for: ing)
-            let commonness = catalog.entry(id: key)?.commonness
-            let worthAsking = commonness == .specialty || commonness == .rare || pantry.missing.contains(key)
-            guard worthAsking, !pantry.have.contains(key), seen.insert(key).inserted else { continue }
+            guard isSpecialty(key) || pantry.missing.contains(key), !pantry.have.contains(key), seen.insert(key).inserted else { continue }
             out.append(PantryUpdate(key: key, displayName: ing.name, status: .have))
         }
         return out

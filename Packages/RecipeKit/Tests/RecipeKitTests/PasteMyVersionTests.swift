@@ -184,11 +184,10 @@ struct RecipeDiffTests {
             "Add 1 tsp rice vinegar",
             "Use your steps (11 steps)",
         ])
+        // Only the specialty swap-out is marked missing: using a paste doesn't mean they're out
+        // of ginger, garlic or brown sugar.
         #expect(diff.pantryUpdates.map(\.summary) == [
-            "Pantry: Ginger → don't have",
-            "Pantry: Garlic → don't have",
             "Pantry: Shaoxing wine → don't have",
-            "Pantry: Brown sugar → don't have",
             "Pantry: Sichuan peppercorn → have",
             "Pantry: Ginger garlic paste → have",
             "Pantry: Lao Gan Ma → have",
