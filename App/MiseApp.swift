@@ -9,6 +9,7 @@ struct MiseApp: App {
     @State private var router = AppRouter()
 
     init() {
+        if LaunchOptions.resetData { PendingImports.clear() }
         // UI tests: simulate the share extension having queued a URL.
         if let url = LaunchOptions.enqueueImport { PendingImports.append(url) }
     }
@@ -58,8 +59,10 @@ struct MainTabView: View {
         .onChange(of: scenePhase, initial: true) { _, phase in
             guard phase == .active else { return }
             provider.refresh()
-            // Pick up links shared from Safari while the app was in the background.
-            router.enqueue(PendingImports.drain())
+            // Pick up links shared from Safari. Each stays in the App Group queue until its
+            // sheet closes, so a link isn't lost if the app is killed mid-import.
+            router.onSharedImportFinished = { PendingImports.remove($0) }
+            router.enqueue(PendingImports.pending())
         }
         .sheet(item: $router.activeImport, onDismiss: { router.importSheetDismissed() }) { request in
             NavigationStack {

@@ -14,8 +14,11 @@ struct IngredientCheckView: View {
     @Environment(AssistantProvider.self) private var provider
     @State private var items: [ReviewItem] = []
     @State private var loaded = false
-    /// Answers to "Do you have X?" (true = yes).
-    @State private var answers: [UUID: Bool] = [:]
+    /// Answers to "Do you have X?" (true = yes), by pantry key, so an ingredient listed twice
+    /// is only asked about once.
+    @State private var answers: [String: Bool] = [:]
+    /// Accessibility identifier base per item: the pantry key, with "-2", "-3"… for repeats.
+    @State private var idBases: [UUID: String] = [:]
     /// Chosen swap ID per ingredient; absent = keep original.
     @State private var choices: [UUID: String] = [:]
     /// Spicy ingredients the user agreed to halve.
@@ -29,7 +32,7 @@ struct IngredientCheckView: View {
                 ForEach(items) { item in
                     card(for: item)
                         .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("review.\(item.pantryKey)")
+                        .accessibilityIdentifier("review.\(idBase(item))")
                 }
                 Text("Flags are based on a limited ingredient list; check labels if you have allergies.")
                     .font(Theme.Fonts.caption)
@@ -104,7 +107,7 @@ struct IngredientCheckView: View {
 
     @ViewBuilder
     private func askCard(_ item: ReviewItem, name: String) -> some View {
-        switch answers[item.id] {
+        switch answers[item.pantryKey] {
         case .some(true):
             ReviewCard(tone: .herb, systemImage: "checkmark.circle.fill", title: name, subtitle: "Saved to your pantry") {
                 halfOption(item)
@@ -120,10 +123,10 @@ struct IngredientCheckView: View {
                 HStack(spacing: Theme.Spacing.s) {
                     Button("Yes") { answer(item, have: true) }
                         .buttonStyle(.miseSecondaryWide)
-                        .accessibilityIdentifier("review.\(item.pantryKey).yes")
+                        .accessibilityIdentifier("review.\(idBase(item)).yes")
                     Button("No") { answer(item, have: false) }
                         .buttonStyle(.miseSecondaryWide)
-                        .accessibilityIdentifier("review.\(item.pantryKey).no")
+                        .accessibilityIdentifier("review.\(idBase(item)).no")
                 }
             }
         }
@@ -134,13 +137,13 @@ struct IngredientCheckView: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(item.swaps) { swap in
                 swapRow(item: item, title: swap.title, note: swap.note, fromPantry: swap.fromPantry,
-                        selected: choices[item.id] == swap.id, identifier: "swap.\(item.pantryKey).\(swap.id)") {
+                        selected: choices[item.id] == swap.id, identifier: "swap.\(idBase(item)).\(swap.id)") {
                     choices[item.id] = swap.id
                 }
                 Divider().overlay(Color.mise.divider)
             }
             swapRow(item: item, title: "Keep original", note: nil, fromPantry: false,
-                    selected: choices[item.id] == nil, identifier: "swap.\(item.pantryKey).keep") {
+                    selected: choices[item.id] == nil, identifier: "swap.\(idBase(item)).keep") {
                 choices[item.id] = nil
             }
         }
@@ -155,7 +158,7 @@ struct IngredientCheckView: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                     Text(title).font(Theme.Fonts.body).foregroundStyle(Color.mise.ink)
-                    if let note, !note.isEmpty {
+                    if let note, !note.isEmpty, note != title {
                         Text(note).font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
                     }
                     if fromPantry { Badge(title: "From your pantry", systemImage: "checkmark") }
@@ -185,9 +188,11 @@ struct IngredientCheckView: View {
                 }
             }
             .tint(Color.mise.accent)
-            .accessibilityIdentifier("review.\(item.pantryKey).half")
+            .accessibilityIdentifier("review.\(idBase(item)).half")
         }
     }
+
+    private func idBase(_ item: ReviewItem) -> String { idBases[item.id] ?? item.pantryKey }
 
     // MARK: Actions
 
@@ -198,6 +203,12 @@ struct IngredientCheckView: View {
         var reviewed = SwapEngine().review(recipe: recipe, pantry: pantry, prefs: prefs)
         // Spicy-only cards default to "use half"; that's what they're for.
         for item in reviewed where item.kind == .tooSpicy && item.ingredient.quantity != nil { halved.insert(item.id) }
+        var seen: [String: Int] = [:]
+        for item in reviewed {
+            seen[item.pantryKey, default: 0] += 1
+            let n = seen[item.pantryKey]!
+            idBases[item.id] = n == 1 ? item.pantryKey : "\(item.pantryKey)-\(n)"
+        }
         items = reviewed
         loaded = true
         // Ask the assistant for swaps the bundled table doesn't have.
@@ -212,7 +223,7 @@ struct IngredientCheckView: View {
     }
 
     private func answer(_ item: ReviewItem, have: Bool) {
-        withAnimation { answers[item.id] = have }
+        withAnimation { answers[item.pantryKey] = have }
         context.setPantry(key: item.pantryKey, displayName: item.ingredient.name.lowercased(), status: have ? .have : .missing)
         try? context.save()
     }

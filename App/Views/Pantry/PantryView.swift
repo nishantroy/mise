@@ -102,7 +102,7 @@ struct PantryView: View {
         let text = draft.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return }
         let catalog = IngredientCatalog.shared
-        if let entry = catalog.match(text) {
+        if let entry = catalog.exactMatch(text) {
             context.setPantry(key: entry.id, displayName: entry.displayName, status: draftStatus)
         } else {
             context.setPantry(key: IngredientCatalog.normalisedName(text), displayName: text.lowercased(), status: draftStatus)

@@ -21,10 +21,19 @@ enum PendingImports {
         defaults.set(list, forKey: key)
     }
 
-    /// Returns queued URLs in order and empties the queue.
-    static func drain() -> [URL] {
-        guard let defaults, let list = defaults.stringArray(forKey: key), !list.isEmpty else { return [] }
-        defaults.removeObject(forKey: key)
-        return list.compactMap(URL.init(string:))
+    /// Queued URLs in order. Nothing is removed: the app calls `remove(_:)` once a URL's import
+    /// sheet has been dealt with, so a URL survives the app being killed mid-sheet.
+    static func pending() -> [URL] {
+        (defaults?.stringArray(forKey: key) ?? []).compactMap(URL.init(string:))
+    }
+
+    static func remove(_ url: URL) {
+        guard let defaults else { return }
+        let list = (defaults.stringArray(forKey: key) ?? []).filter { $0 != url.absoluteString }
+        if list.isEmpty { defaults.removeObject(forKey: key) } else { defaults.set(list, forKey: key) }
+    }
+
+    static func clear() {
+        defaults?.removeObject(forKey: key)
     }
 }

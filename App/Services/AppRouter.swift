@@ -13,26 +13,39 @@ final class AppRouter {
     var activeImport: ImportRequest?
     /// Shared URLs waiting for their turn in the import sheet.
     private(set) var queuedImports: [URL] = []
+    /// The shared URL whose sheet is showing; removed from the App Group queue when it closes.
+    private(set) var presentedSharedURL: URL?
+    /// Called with a shared URL once its sheet has closed (saved or cancelled).
+    var onSharedImportFinished: (URL) -> Void = { _ in }
 
     func startImport(url: URL? = nil) {
         activeImport = ImportRequest(url: url)
     }
 
-    /// Queue URLs from the share extension; shows the first straight away.
+    /// Queue URLs from the share extension (ignoring ones already queued or showing);
+    /// shows the first straight away.
     func enqueue(_ urls: [URL]) {
-        queuedImports += urls
+        for url in urls where url != presentedSharedURL && !queuedImports.contains(url) {
+            queuedImports.append(url)
+        }
         showNextQueuedImportIfIdle()
     }
 
     /// Called when the import sheet closes.
     func importSheetDismissed() {
+        if let url = presentedSharedURL {
+            presentedSharedURL = nil
+            onSharedImportFinished(url)
+        }
         showNextQueuedImportIfIdle()
     }
 
     private func showNextQueuedImportIfIdle() {
         guard activeImport == nil, !queuedImports.isEmpty else { return }
         tab = .recipes
-        activeImport = ImportRequest(url: queuedImports.removeFirst())
+        let url = queuedImports.removeFirst()
+        presentedSharedURL = url
+        activeImport = ImportRequest(url: url)
     }
 
     func open(recipeID: UUID) {

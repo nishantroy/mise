@@ -11,6 +11,8 @@ struct AdjustRecipeView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AssistantProvider.self) private var provider
     @State private var rating: Int = 0
+    /// Whether the user tapped a thumb in this session (so deselecting can clear the rating).
+    @State private var ratingTouched = false
     @State private var chips: Set<String> = []
     @State private var text = ""
     @State private var proposals: [Proposal]?
@@ -98,6 +100,7 @@ struct AdjustRecipeView: View {
         let selected = rating == value
         return Button {
             rating = selected ? 0 : value
+            ratingTouched = true
         } label: {
             Label(label, systemImage: selected ? symbol + ".fill" : symbol)
                 .font(Theme.Fonts.meta)
@@ -174,7 +177,11 @@ struct AdjustRecipeView: View {
         let summary = edits.isEmpty ? "Cooked it" : "Cooked it: " + edits.summary(in: saved.recipe)
         saved.apply(edits, summary: summary)
         saved.timesCooked += 1
-        saved.rating = rating == 0 ? (chips.contains("Perfect") ? 1 : saved.rating) : rating
+        if ratingTouched {
+            saved.rating = rating == 0 ? nil : rating
+        } else if chips.contains("Perfect") {
+            saved.rating = 1
+        }
         try? context.save()
         dismiss()
     }

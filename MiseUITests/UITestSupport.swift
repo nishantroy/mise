@@ -50,6 +50,8 @@ enum StubPages {
     static let porkBelly = "https://example.test/red-braised-pork-belly"
     static let chowMein = "https://example.test/chow-mein"
     static let notARecipe = "https://example.test/not-a-recipe"
+    /// Shaoxing wine listed twice (marinade and sauce).
+    static let twiceWine = "https://example.test/twice-wine"
 
     /// Launch environment serving fixture HTML for the stub URLs.
     static func environment() -> [String: String] {
@@ -66,6 +68,13 @@ enum StubPages {
             porkBelly: html("woksoflife-red-braised-pork-belly"),
             chowMein: html("recipetineats-chow-mein"),
             notARecipe: "<html><head><title>Hello</title></head><body><p>No recipe here.</p></body></html>",
+            twiceWine: """
+            <html><head><script type="application/ld+json">
+            {"@type":"Recipe","name":"Drunken Chicken","recipeYield":"4",
+             "recipeIngredient":["500 g chicken thighs","2 tbsp Shaoxing wine","1 tbsp soy sauce","1 tbsp Shaoxing wine"],
+             "recipeInstructions":["Marinate the chicken in the Shaoxing wine and soy sauce.","Cook, then splash in the rest of the Shaoxing wine."]}
+            </script></head><body></body></html>
+            """,
         ]
         let data = try! JSONEncoder().encode(pages)
         return ["MISE_STUB_PAGES": String(decoding: data, as: UTF8.self)]
