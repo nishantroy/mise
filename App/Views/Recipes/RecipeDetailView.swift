@@ -109,13 +109,7 @@ struct RecipeDetailView: View {
                     Text(time).accessibilityLabel(recipe.displayTime?.isEstimate == true ? "About \(time.dropFirst()), estimated" : time)
                         .accessibilityIdentifier("detail.time")
                 }
-                if let cuisine = recipe.cuisine, !cuisine.isEmpty {
-                    if recipe.cuisineIsGuess {
-                        CuisineGuessMenu(cuisine: cuisine, onPick: setCuisine, onClear: { setCuisine(nil) })
-                    } else {
-                        Text(cuisine).accessibilityIdentifier("detail.cuisine")
-                    }
-                }
+                CuisineMenu(cuisine: RecipeFormat.cuisine(recipe), onPick: setCuisine, onClear: { setCuisine(nil) })
                 if saved.timesCooked > 0 { Text("Cooked \(saved.timesCooked)×") }
                 if let rating = saved.rating, rating != 0 {
                     Image(systemName: rating > 0 ? "hand.thumbsup.fill" : "hand.thumbsdown.fill")

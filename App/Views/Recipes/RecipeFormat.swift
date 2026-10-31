@@ -14,7 +14,7 @@ enum RecipeFormat {
     }
 
     /// "35 min · Chinese". Uses the stated time, or the estimate as "~45 min" when the page
-    /// gave none; a guessed cuisine reads "Chinese (guess)".
+    /// gave none.
     static func metadata(_ recipe: Recipe) -> String {
         [time(recipe), cuisine(recipe)].compactMap { $0 }.joined(separator: " · ")
     }
@@ -27,7 +27,7 @@ enum RecipeFormat {
 
     static func cuisine(_ recipe: Recipe) -> String? {
         guard let c = recipe.cuisine?.trimmingCharacters(in: .whitespaces), !c.isEmpty else { return nil }
-        return recipe.cuisineIsGuess ? "\(c) (guess)" : c
+        return c
     }
 
     /// The detail screen's realistic-time line, or nil when there's nothing to add to the stated time:

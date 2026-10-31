@@ -18,12 +18,11 @@ final class InsightsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["review.summary"].waitForExistence(timeout: 15))
         app.buttons["review.save"].tap()
 
-        // Detail: guessed cuisine and an estimated time.
+        // Detail: guessed cuisine (shown like any other) and an estimated time.
         XCTAssertTrue(app.staticTexts["detail.title"].waitForExistence(timeout: 10))
         let cuisine = app.descendants(matching: .any)["detail.cuisine"]
         XCTAssertTrue(cuisine.waitForExistence(timeout: 5))
-        XCTAssertTrue(cuisine.label.contains("Chinese"), cuisine.label)
-        XCTAssertTrue(cuisine.label.contains("guessed"), cuisine.label)
+        XCTAssertEqual(cuisine.label, "Cuisine: Chinese")
 
         let time = app.descendants(matching: .any)["detail.time"]
         XCTAssertTrue(time.exists)
@@ -38,11 +37,12 @@ final class InsightsUITests: XCTestCase {
         // Default weeknight time (30 min) is shorter than the estimate.
         XCTAssertTrue(app.descendants(matching: .any)["detail.weeknightHint"].exists)
 
-        // The list card shows the estimate with "~" and marks the guess.
+        // The list card shows the estimate with "~" and the cuisine without a guess marker.
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let card = app.descendants(matching: .any).matching(identifier: "recipe.card").firstMatch
         XCTAssertTrue(card.waitForExistence(timeout: 5))
-        XCTAssertTrue(card.label.contains("Chinese (guess)"), card.label)
+        XCTAssertTrue(card.label.contains("Chinese"), card.label)
+        XCTAssertFalse(card.label.contains("guess"), card.label)
         XCTAssertTrue(card.label.contains("~"), card.label)
 
         // Change the guess: it becomes the user's cuisine and is recorded in history.
@@ -54,7 +54,7 @@ final class InsightsUITests: XCTestCase {
         korean.tap()
         let picked = app.descendants(matching: .any)["detail.cuisine"]
         XCTAssertTrue(picked.waitForExistence(timeout: 3))
-        XCTAssertEqual(picked.label, "Korean")
+        XCTAssertEqual(picked.label, "Cuisine: Korean")
         let revision = app.descendants(matching: .any).matching(identifier: "detail.revision")
             .matching(NSPredicate(format: "label CONTAINS 'Cuisine set to Korean'")).firstMatch
         app.scrollTo(revision)
@@ -77,7 +77,7 @@ final class InsightsUITests: XCTestCase {
         let time = app.descendants(matching: .any)["detail.time"]
         XCTAssertEqual(time.label, "15 min", "stated time is kept")
         let cuisine = app.descendants(matching: .any)["detail.cuisine"]
-        XCTAssertEqual(cuisine.label, "Chinese", "page cuisine, not a guess")
+        XCTAssertEqual(cuisine.label, "Cuisine: Chinese", "page cuisine, editable like a guess")
 
         let estimate = app.descendants(matching: .any)["detail.timeEstimate"]
         XCTAssertTrue(estimate.exists)
@@ -91,6 +91,6 @@ final class InsightsUITests: XCTestCase {
         recheck.tap()
         XCTAssertTrue(estimate.waitForExistence(timeout: 15))
         XCTAssertTrue(estimate.label.contains("recipe says 15 min"), estimate.label)
-        XCTAssertEqual(app.descendants(matching: .any)["detail.cuisine"].label, "Chinese")
+        XCTAssertEqual(app.descendants(matching: .any)["detail.cuisine"].label, "Cuisine: Chinese")
     }
 }

@@ -1,16 +1,16 @@
 import SwiftUI
 import RecipeKit
 
-/// A guessed cuisine on the detail screen: the name with a small "guess" tag. Tapping opens a
-/// menu to pick a different cuisine (or confirm this one) or clear it.
-struct CuisineGuessMenu: View {
-    let cuisine: String
+/// The cuisine on the detail screen. Tapping opens a menu to pick a different cuisine or clear
+/// it; with no cuisine it reads "Add cuisine". Guessed and page cuisines look the same.
+struct CuisineMenu: View {
+    let cuisine: String?
     var onPick: (String) -> Void
     var onClear: () -> Void
 
     var body: some View {
         Menu {
-            Section("Guessed from the ingredients") {
+            Section("Cuisine") {
                 ForEach(UserPreferences.cuisineChoices, id: \.self) { choice in
                     Button {
                         onPick(choice)
@@ -19,15 +19,12 @@ struct CuisineGuessMenu: View {
                     }
                 }
             }
-            Button("Clear cuisine", systemImage: "xmark", role: .destructive, action: onClear)
+            if cuisine != nil {
+                Button("Clear cuisine", systemImage: "xmark", role: .destructive, action: onClear)
+            }
         } label: {
             HStack(spacing: Theme.Spacing.xxs) {
-                Text(cuisine)
-                Text("guess")
-                    .font(Theme.Fonts.caption)
-                    .padding(.horizontal, Theme.Spacing.xs)
-                    .padding(.vertical, 2)
-                    .background(Color.mise.surfaceSunken, in: Capsule())
+                Text(cuisine ?? "Add cuisine")
                 Image(systemName: "chevron.up.chevron.down")
                     .imageScale(.small)
             }
@@ -35,8 +32,8 @@ struct CuisineGuessMenu: View {
             .frame(minHeight: Theme.Size.minTap)
             .contentShape(Rectangle())
         }
-        .accessibilityLabel("Cuisine: \(cuisine), guessed")
-        .accessibilityHint("Change or clear the guessed cuisine")
+        .accessibilityLabel(cuisine.map { "Cuisine: \($0)" } ?? "Add cuisine")
+        .accessibilityHint("Change or clear the cuisine")
         .accessibilityIdentifier("detail.cuisine")
     }
 }
@@ -108,7 +105,7 @@ struct TimeInsightView: View {
                                                    reason: "About 15 min to prep 15 ingredients, 5 min of cooking and 11 min marinating.",
                                                    source: .rules, passiveLabel: "marinating"))
     VStack(alignment: .leading) {
-        CuisineGuessMenu(cuisine: "Chinese", onPick: { _ in }, onClear: {})
+        CuisineMenu(cuisine: "Chinese", onPick: { _ in }, onClear: {})
         TimeInsightView(recipe: recipe, prefs: UserPreferences(weeknightMinutes: 20))
     }
     .padding(Theme.Spacing.gutter)
