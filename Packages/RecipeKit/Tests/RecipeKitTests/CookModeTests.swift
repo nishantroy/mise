@@ -119,6 +119,57 @@ struct CookTimerTests {
         #expect(CookTimers.clock(-3) == "0:00")
         #expect(CookTimers.clock(0.2) == "0:01", "rounds up, so 0:00 means done")
     }
+
+    @Test func rangesOfferTheLowAndHighEnd() throws {
+        let t = CookTimers.timers(in: "Cook the onion and bell pepper for 3–4 min. Simmer 2-3 minutes, then rest 30-40 mins. Bake 1 hour.", step: 0)
+        #expect(t.map(\.lowerSeconds) == [180, 120, 1800, nil])
+        #expect(t.map(\.choices) == [[180, 240], [120, 180], [1800, 2400], [3600]])
+        let words = try #require(CookTimers.timers(for: try mongolianBeef())[4].last)
+        #expect(words.label == "30 sec–1 min")
+        #expect(words.choices == [30, 60])
+    }
+
+    @Test func titlesComeFromTheWordsBeforeTheTime() throws {
+        let t = CookTimers.timers(in: "Cook the onion and bell pepper for 3–4 min. Simmer 2-3 minutes, then rest 30-40 mins.", step: 0)
+        #expect(t.map(\.title) == ["Cook the onion and bell pepper", "Simmer", "Rest"])
+        #expect(CookTimers.timers(in: "Simmer the sauce for about 10 minutes, stirring.", step: 0).map(\.title) == ["Simmer the sauce"])
+        #expect(CookTimers.timers(in: "Marinate the chicken in the fridge for at least 30 minutes.", step: 0).map(\.title)
+                == ["Marinate the chicken"], "cut to 32 characters on a word")
+        // The time first: the passive label, else "Timer".
+        #expect(CookTimers.timers(in: "10 minutes later, flip.", step: 0).map(\.title) == ["Timer"])
+        #expect(CookTimers.timers(in: "Leave the dough to rise in a warm spot, covered with a damp towel, for 1 hour.", step: 0)
+            .allSatisfy { $0.title.count <= 32 && !$0.title.hasSuffix(",") })
+        let chow = CookTimers.timers(for: try chowMein()).flatMap { $0 }
+        #expect(chow.allSatisfy { !$0.title.isEmpty && $0.title.count <= 32 })
+        // The nearest phrase before the time, past headings ("Marinate Chicken:") and amounts.
+        #expect(chow.map(\.title) == ["Set aside to marinate", "My pack says soak in boiled", "Add garlic and stir fry",
+                                      "Add chicken and stir fry", "Stir fry", "Stir fry", "Toss through"])
+    }
+
+    @Test func adjustingClampsAtTenSeconds() {
+        #expect(CookTimerAdjust.adjusted(remaining: 240, by: 60) == 300)
+        #expect(CookTimerAdjust.adjusted(remaining: 240, by: -60) == 180)
+        #expect(CookTimerAdjust.adjusted(remaining: 50, by: -60) == 10)
+        #expect(CookTimerAdjust.adjusted(remaining: 5, by: -60) == 5, "never lengthens on −1 min")
+        #expect(CookTimerAdjust.adjusted(remaining: 12 * 3600 - 30, by: 60) == 12 * 3600)
+        #expect(CookTimerAdjust.canShorten(remaining: 11))
+        #expect(!CookTimerAdjust.canShorten(remaining: 10))
+    }
+
+    @Test func customDurations() {
+        #expect(CookTimerAdjust.customSeconds("5") == 300)
+        #expect(CookTimerAdjust.customSeconds(" 1.5 ") == 90)
+        #expect(CookTimerAdjust.customSeconds("1,5") == 90)
+        #expect(CookTimerAdjust.customSeconds("1 1/2") == 90)
+        #expect(CookTimerAdjust.customSeconds("1:30") == 90)
+        #expect(CookTimerAdjust.customSeconds("0:20") == 20)
+        #expect(CookTimerAdjust.customSeconds("0:05") == nil, "under 10 s")
+        #expect(CookTimerAdjust.customSeconds("1:75") == nil)
+        #expect(CookTimerAdjust.customSeconds("0") == nil)
+        #expect(CookTimerAdjust.customSeconds("abc") == nil)
+        #expect(CookTimerAdjust.customSeconds("") == nil)
+        #expect(CookTimerAdjust.customSeconds("721") == nil, "over 12 h")
+    }
 }
 
 @Suite("Prep planner")

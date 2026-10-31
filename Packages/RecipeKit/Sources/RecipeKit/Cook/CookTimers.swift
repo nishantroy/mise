@@ -6,14 +6,62 @@ public struct CookTimerSpec: Hashable, Sendable, Identifiable {
     public var step: Int
     /// Position among the step's timers.
     public var position: Int
-    /// The upper bound, in seconds.
+    /// The upper bound, in seconds (the default when started).
     public var seconds: Int
+    /// The lower bound of a range ("3–4 min" → 180), else nil.
+    public var lowerSeconds: Int?
     /// What the recipe says, shortened: "3–4 min", "30 sec–1 min", "1 ½ min".
     public var label: String
     /// Waiting rather than cooking ("marinating"), from `TimeEstimator.passiveLabel`.
     public var passiveLabel: String?
+    /// What the timer is for, from the words before the duration: "Simmer the sauce",
+    /// "Cook the onion and bell pepper"; "Marinating" or "Timer" when the clause starts with the time.
+    public var title: String
 
     public var id: String { "\(step).\(position)" }
+
+    /// The durations the cook can pick before starting: the low and high end of a range, or just one.
+    public var choices: [Int] {
+        guard let lowerSeconds, lowerSeconds > 0, lowerSeconds < seconds else { return [seconds] }
+        return [lowerSeconds, seconds]
+    }
+}
+
+/// Adjusting a running timer and reading a custom duration. Pure, so it's unit-tested here.
+public enum CookTimerAdjust {
+    /// "−1 min" never takes a timer below this many seconds.
+    public static let minimumSeconds: TimeInterval = 10
+    /// The longest timer: 12 hours.
+    public static let maximumSeconds: TimeInterval = 12 * 3600
+
+    /// The remaining time after adding `delta` seconds (−60 / +60). Shortening stops at
+    /// `minimumSeconds` and never lengthens a timer that already has less than that left.
+    public static func adjusted(remaining: TimeInterval, by delta: TimeInterval) -> TimeInterval {
+        let target = remaining + delta
+        if delta >= 0 { return min(target, max(remaining, maximumSeconds)) }
+        return max(target, min(remaining, minimumSeconds))
+    }
+
+    /// Whether "−1 min" can do anything.
+    public static func canShorten(remaining: TimeInterval) -> Bool { remaining > minimumSeconds }
+
+    /// A custom duration typed by the cook: minutes ("5", "1.5", "1,5", "1 1/2") or "m:ss" ("1:30").
+    /// Nil when unreadable, under `minimumSeconds` or over `maximumSeconds`.
+    public static func customSeconds(_ text: String) -> Int? {
+        let t = text.trimmed
+        let seconds: Double
+        if let m = Rx.firstMatch("^(\\d{1,3}):(\\d{2})$", in: t),
+           let mm = m[1].flatMap(Double.init), let ss = m[2].flatMap(Double.init), ss < 60 {
+            seconds = mm * 60 + ss
+        } else if Rx.test("^[\\d.,/½¼¾⅓⅔ ]+$", t),
+                  let minutes = TimeEstimator.parseNumber(t.replacingOccurrences(of: ",", with: ".")) {
+            seconds = minutes * 60
+        } else {
+            return nil
+        }
+        guard seconds.isFinite, seconds >= minimumSeconds, seconds <= maximumSeconds else { return nil }
+        return Int(seconds.rounded())
+    }
 }
 
 /// Durations in a step, as timers. Reuses `TimeEstimator`'s duration extraction.
@@ -37,6 +85,7 @@ public enum CookTimers {
                 var i = 0
                 while i < found.count {
                     var text = found[i].text
+                    let firstText = text
                     var seconds = perSideSeconds(found[i])
                     var lower: Int?
                     // "30 seconds to a minute": one timer, labelled as a range.
@@ -48,7 +97,9 @@ public enum CookTimers {
                     }
                     guard seconds > 0 else { i += 1; continue }
                     let label = lower.map { "\(format(seconds: $0))–\(format(seconds: seconds))" } ?? label(for: text, seconds: seconds)
-                    out.append(CookTimerSpec(step: index, position: out.count, seconds: seconds, label: label, passiveLabel: passive))
+                    if lower == nil { lower = lowerBound(for: text, seconds: seconds) }
+                    out.append(CookTimerSpec(step: index, position: out.count, seconds: seconds, lowerSeconds: lower, label: label,
+                                             passiveLabel: passive, title: title(in: clause, before: firstText, passive: passive)))
                     i += 1
                 }
             }
@@ -71,6 +122,48 @@ public enum CookTimers {
         guard b.location != NSNotFound else { return false }
         let gap = ns.substring(with: NSRange(location: rest.location, length: b.location - rest.location))
         return Rx.test("^\\s*(?:to|or|-|–|—)\\s*$", gap)
+    }
+
+    /// The lower end of a written range ("3–4 min" → 180), or nil.
+    static func lowerBound(for text: String, seconds: Int) -> Int? {
+        let number = "\\d+(?:\\.\\d+)?(?:\\s*[½¼¾⅓⅔]|\\s+\\d+/\\d+)?|\\d+/\\d+|[½¼¾⅓⅔]"
+        let pattern = "^(\(number))\\s*(?:-|–|—|to|or)\\s*(\(number))(?:\\s+(?:more|extra|additional|further))?\\s*-?\\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)$"
+        guard let m = Rx.firstMatch(pattern, in: text.trimmed), let first = m[1],
+              let value = TimeEstimator.parseNumber(first), let unitText = m[3]?.lowercased() else { return nil }
+        let scale: Double = unitText.hasPrefix("h") ? 3600 : unitText.hasPrefix("s") ? 1 : 60
+        let lower = Int((value * scale).rounded())
+        return lower > 0 && lower < seconds ? lower : nil
+    }
+
+    /// The words before the duration, trimmed to a short title: "Simmer 2–3 minutes" → "Simmer",
+    /// "Cook the onion and bell pepper for 3–4 min" → "Cook the onion and bell pepper".
+    static func title(in clause: String, before durationText: String, passive: String?) -> String {
+        let ns = clause as NSString
+        let at = ns.range(of: durationText)
+        let before = at.location == NSNotFound ? "" : ns.substring(to: at.location)
+        // Trailing filler before the time: "for about", "another", "a further", "(".
+        let filler = "for|about|around|roughly|approximately|approx|another|a further|further|an extra|extra|a|an|or|of|up to|at least|over|in|within|after|the|until"
+        // The nearest comma/colon/bracket-separated phrase that says something:
+        // "Pour sauce over, mix to coat, set aside to marinate for 10 minutes" → "set aside to marinate".
+        var head = ""
+        for segment in Rx.replace("[,:;()]", in: before, with: "\u{1}").split(separator: "\u{1}").reversed() {
+            var s = Rx.replace("^\\W*(?:(?:and|then|now|next|after that|afterwards)\\b\\W*)+", in: String(segment), with: "")
+            s = Rx.replace("(?:[\\s–—-]+|\\b(?:\(filler))\\b)+$", in: s, with: "").trimmed
+            if s.count >= 3, Rx.test("[a-z]", s) { head = s; break }
+        }
+        // Short enough for one Lock Screen line.
+        var words: [String] = []
+        for word in head.split(separator: " ").map(String.init) {
+            if (words + [word]).joined(separator: " ").count > 32 { break }
+            words.append(word)
+        }
+        while let last = words.last,
+              Rx.test("^(?:the|a|an|and|or|with|in|on|of|to|into|over|for|your|it|until)$", last) || Rx.test("[,;:]$", last) {
+            words.removeLast()
+        }
+        let title = words.joined(separator: " ")
+        guard title.count >= 3, Rx.test("[a-z]", title) else { return RecipeFormatText.capitalisedFirst(passive ?? "timer") }
+        return RecipeFormatText.capitalisedFirst(title)
     }
 
     /// "2-3 minutes" → "2–3 min", "1 1/2 minutes" → "1 ½ min", "10 seconds" → "10 sec".
