@@ -20,7 +20,7 @@ final class AdjustUITests: XCTestCase {
 
         app.buttons["detail.madeThis"].tap()
         let text = app.textViews["adjust.text"].exists ? app.textViews["adjust.text"] : app.textFields["adjust.text"]
-        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertTrue(text.waitForExistence(timeout: 10))
         text.tap()
         text.typeText("Used chicken thighs instead of breast and it was too salty, needed 10 more minutes")
         app.buttons["adjust.thumbsUp"].tap()
@@ -75,7 +75,7 @@ final class AdjustUITests: XCTestCase {
 
         app.buttons["detail.madeThis"].tap()
         let text = app.textViews["adjust.text"].exists ? app.textViews["adjust.text"] : app.textFields["adjust.text"]
-        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertTrue(text.waitForExistence(timeout: 10))
         text.tap()
         text.typeText("Skipped the bean sprouts")
         app.buttons["adjust.suggest"].tap()

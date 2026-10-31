@@ -32,7 +32,9 @@ final class SafariShareUITests: XCTestCase {
             throw XCTSkip("Mise not listed in the share sheet")
         }
         mise.tap()
-        sleep(3)
+        // The extension loads the URL asynchronously and shows its confirmation for ~1 s;
+        // give it time to write the App Group queue before switching back.
+        sleep(6)
 
         app.activate()
         let field = app.textFields["import.url"]

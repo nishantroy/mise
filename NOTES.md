@@ -79,6 +79,8 @@ Decisions and deviations from `PLAN.md`, plus checks that need a real device.
 - **Ingredient check, repeated ingredients:** "Do you have X?" answers are keyed by pantry key, so an ingredient listed twice (marinade and sauce) is asked once and both cards update. Cards stay separate, because each line can take a different swap. Accessibility identifiers are `review.<key>`, then `review.<key>-2`, `-3`…
 - **Rating:** tapping a thumb marks the rating as touched; deselecting it saves no rating (nil). If no thumb was touched, the "Perfect" chip still sets thumbs-up, and otherwise the old rating is kept.
 - **Swap rows** hide the note when it repeats the title ("Leave it out").
+- **Share timing (seen in the post-review suite run):** the app reads the App Group queue only when it becomes active. If you switch back to Mise within a second or two of tapping Mise in the share sheet, before the extension has written the URL, the link is picked up on the next activation instead. `SafariShareUITests` now waits 6 s before switching back. A Darwin notification from the extension would close this gap; not done.
+- **Post-review test runs:** `swift test` 107 passed. Full UI suite (ScreenshotTour skipped): the first run had 2 failures, a 5 s wait for the adjust sheet in `testResetToOriginalIsRecordedInHistory` (raised to 10 s) and the share-timing race above. After those test-only timing changes both pass alone, and a full rerun passed 14/14.
 
 ## Manual checks (owner, on a device)
 
