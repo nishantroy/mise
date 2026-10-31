@@ -120,21 +120,50 @@ struct CookTimerTests {
         #expect(CookTimers.clock(0.2) == "0:01", "rounds up, so 0:00 means done")
     }
 
-    @Test func titlesComeFromTheWordsBeforeTheTime() throws {
-        let t = CookTimers.timers(in: "Cook the onion and bell pepper for 3–4 min. Simmer 2-3 minutes, then rest 30-40 mins.", step: 0)
-        #expect(t.map(\.title) == ["Cook the onion and bell pepper", "Simmer", "Rest"])
-        #expect(CookTimers.timers(in: "Simmer the sauce for about 10 minutes, stirring.", step: 0).map(\.title) == ["Simmer the sauce"])
-        #expect(CookTimers.timers(in: "Marinate the chicken in the fridge for at least 30 minutes.", step: 0).map(\.title)
-                == ["Marinate the chicken"], "cut to 32 characters on a word")
-        // The time first: the passive label, else "Timer".
-        #expect(CookTimers.timers(in: "10 minutes later, flip.", step: 0).map(\.title) == ["Timer"])
-        #expect(CookTimers.timers(in: "Leave the dough to rise in a warm spot, covered with a damp towel, for 1 hour.", step: 0)
-            .allSatisfy { $0.title.count <= 32 && !$0.title.hasSuffix(",") })
-        let chow = CookTimers.timers(for: try chowMein()).flatMap { $0 }
-        #expect(chow.allSatisfy { !$0.title.isEmpty && $0.title.count <= 32 })
-        // The nearest phrase before the time, past headings ("Marinate Chicken:") and amounts.
-        #expect(chow.map(\.title) == ["Set aside to marinate", "My pack says soak in boiled", "Add garlic and stir fry",
-                                      "Add chicken and stir fry", "Stir fry", "Stir fry", "Toss through"])
+    private func titles(_ recipe: Recipe) -> [String] {
+        CookTimers.timers(for: recipe).flatMap { $0 }.map { "\($0.step + 1): \($0.title)" }
+    }
+
+    @Test func labelsForTheFixtures() throws {
+        #expect(titles(try mongolianBeef()) == ["1: Marinate the beef", "5: Cook the chilies", "5: Fry the ginger",
+                                                "5: Cook scallions and garlic"])
+        #expect(titles(try chowMein()) == ["3: Marinate the chicken", "4: Soak the noodles", "6: Stir-fry the garlic",
+                                           "7: Stir-fry the chicken", "8: Stir-fry cabbage and carrot",
+                                           "9: Stir-fry the noodles", "10: Toss the bean sprouts"])
+        let porkBelly = try #require(RecipeImporter.parse(html: Fixture.html("woksoflife-red-braised-pork-belly"), url: nil))
+        #expect(titles(porkBelly) == ["1: Simmer the pork belly", "3: Simmer the mixture"])
+        let kungPao = try #require(RecipeImporter.parse(html: Fixture.html("wikibooks-kung-pao-chicken"), url: nil))
+        #expect(titles(kungPao) == ["2: Marinate the chicken", "5: Heat the oil", "6: Stir-fry the spices",
+                                    "7: Stir-fry the chicken", "8: Stir-fry the vegetables", "9: Cook the sauce"])
+        // The owner's version: "Let it sit for 2–3 min to brown, then break it up and cook until done, 6–7 min total."
+        let mine = try #require(RecipeImporter.parse(text: Fixture.text("mongolian-beef-my-version")))
+        #expect(titles(mine) == ["6: Cook onion and pepper", "7: Brown the beef", "7: Cook the beef",
+                                 "8: Stir the aromatics", "9: Simmer the sauce"])
+        let curry = try #require(RecipeImporter.parse(html: Fixture.html("indianhealthyrecipes-chicken-curry"), url: nil))
+        #expect(titles(curry) == ["2: Sauté the onion", "3: Sauté ginger and garlic", "7: Fry the chicken", "8: Step 8 timer"],
+                "\"This takes around 3 mins.\" reads the sentence before; a bare \"Cook\" is too vague")
+        for recipe in [try mongolianBeef(), try chowMein(), porkBelly, kungPao, mine, curry] {
+            #expect(CookTimers.timers(for: recipe).flatMap { $0 }.allSatisfy { $0.title.split(separator: " ").count <= 4 })
+        }
+    }
+
+    @Test func labelRules() {
+        func title(_ step: String) -> [String] { CookTimers.timers(in: step, step: 2).map(\.title) }
+        #expect(title("Simmer the sauce for about 10 minutes, stirring.") == ["Simmer the sauce"])
+        #expect(title("Marinate the chicken in the fridge for at least 30 minutes.") == ["Marinate the chicken"])
+        #expect(title("Leave the dough to rise in a warm spot, covered with a damp towel, for 1 hour.") == ["Let the dough rise"])
+        #expect(title("Cook the onion and bell pepper for 3–4 min. Simmer 2-3 minutes, then rest 30-40 mins.")
+                == ["Cook onion and pepper", "Simmer onion and pepper", "Rest"])
+        #expect(title("Bring the stock to a boil, then cook for 5 minutes.") == ["Cook the stock"])
+        #expect(title("Bake for 25 minutes until golden.") == ["Bake"])
+        #expect(title("Add the potatoes, carrots, peas and onion. Cook for 10 minutes.") == ["Cook the potatoes"])
+        #expect(title("Add the carrots, peas, celery and onion. Cook for 10 minutes.") == ["Cook the vegetables"])
+        #expect(title("Brown the beef in batches over high heat, 2 minutes per batch.") == ["Brown the beef"])
+        #expect(title("Add the soy sauce and the brown sugar. Stir for 1 minute.") == ["Step 3 timer"], "seasonings aren't foods")
+        // Unsure: the time first, or only a vague verb.
+        #expect(title("10 minutes later, flip.") == ["Step 3 timer"])
+        #expect(title("Cover and cook on a low heat for 3 to 4 minutes.") == ["Step 3 timer"])
+        #expect(title("Let it stand for 5 minutes.") == ["Step 3 timer"])
     }
 
     @Test func adjustingClampsAtTenSeconds() {

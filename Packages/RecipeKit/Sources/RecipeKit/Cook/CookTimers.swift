@@ -13,8 +13,8 @@ public struct CookTimerSpec: Hashable, Sendable, Identifiable {
     public var label: String
     /// Waiting rather than cooking ("marinating"), from `TimeEstimator.passiveLabel`.
     public var passiveLabel: String?
-    /// What the timer is for, from the words before the duration: "Simmer the sauce",
-    /// "Cook the onion and bell pepper"; "Marinating" or "Timer" when the clause starts with the time.
+    /// What the timer is for, at most four words (`TimerLabeler`): "Brown the beef",
+    /// "Soak the noodles"; "Step 3 timer" when the rules aren't sure.
     public var title: String
 
     public var id: String { "\(step).\(position)" }
@@ -52,7 +52,13 @@ public enum CookTimers {
 
     public static func timers(in step: String, step index: Int) -> [CookTimerSpec] {
         var out: [CookTimerSpec] = []
-        for sentence in TimeEstimator.sentences(step) where !TimeEstimator.isStorageAdvice(sentence) {
+        var earlier: [String] = []
+        for sentence in TimeEstimator.sentences(step) {
+            defer { earlier.append(sentence) }
+            guard !TimeEstimator.isStorageAdvice(sentence) else { continue }
+            let ns = sentence as NSString
+            // Where the previous timer's text ended, so each label reads only its own words.
+            var cursor = 0
             for clause in TimeEstimator.clauses(sentence) {
                 let found = TimeEstimator.durations(in: clause).filter { !$0.overnight }
                 guard !found.isEmpty else { continue }
@@ -60,15 +66,27 @@ public enum CookTimers {
                 var i = 0
                 while i < found.count {
                     let firstText = found[i].text
+                    var lastText = firstText
                     var seconds = perSideSeconds(found[i])
                     // "30 seconds to a minute": one timer, the high end.
                     if i + 1 < found.count, joinedAsRange(found[i].text, found[i + 1].text, in: clause) {
                         seconds = perSideSeconds(found[i + 1])
+                        lastText = found[i + 1].text
                         i += 1
                     }
                     guard seconds > 0 else { i += 1; continue }
+                    var start = ns.range(of: firstText, range: NSRange(location: cursor, length: ns.length - cursor))
+                    if start.location == NSNotFound { start = NSRange(location: cursor, length: 0) }
+                    let tail = start.location + start.length
+                    var end = ns.range(of: lastText, range: NSRange(location: start.location, length: ns.length - start.location))
+                    if end.location == NSNotFound || end.location < start.location { end = NSRange(location: tail, length: 0) }
+                    let endLocation = max(tail, end.location + end.length)
+                    let title = TimerLabeler.label(before: ns.substring(with: NSRange(location: cursor, length: start.location - cursor)),
+                                                   after: ns.substring(from: endLocation),
+                                                   earlier: earlier, step: index)
+                    cursor = endLocation
                     out.append(CookTimerSpec(step: index, position: out.count, seconds: seconds, label: format(seconds: seconds),
-                                             passiveLabel: passive, title: title(in: clause, before: firstText, passive: passive)))
+                                             passiveLabel: passive, title: title))
                     i += 1
                 }
             }
@@ -91,37 +109,6 @@ public enum CookTimers {
         guard b.location != NSNotFound else { return false }
         let gap = ns.substring(with: NSRange(location: rest.location, length: b.location - rest.location))
         return Rx.test("^\\s*(?:to|or|-|–|—)\\s*$", gap)
-    }
-
-    /// The words before the duration, trimmed to a short title: "Simmer 2–3 minutes" → "Simmer",
-    /// "Cook the onion and bell pepper for 3–4 min" → "Cook the onion and bell pepper".
-    static func title(in clause: String, before durationText: String, passive: String?) -> String {
-        let ns = clause as NSString
-        let at = ns.range(of: durationText)
-        let before = at.location == NSNotFound ? "" : ns.substring(to: at.location)
-        // Trailing filler before the time: "for about", "another", "a further", "(".
-        let filler = "for|about|around|roughly|approximately|approx|another|a further|further|an extra|extra|a|an|or|of|up to|at least|over|in|within|after|the|until"
-        // The nearest comma/colon/bracket-separated phrase that says something:
-        // "Pour sauce over, mix to coat, set aside to marinate for 10 minutes" → "set aside to marinate".
-        var head = ""
-        for segment in Rx.replace("[,:;()]", in: before, with: "\u{1}").split(separator: "\u{1}").reversed() {
-            var s = Rx.replace("^\\W*(?:(?:and|then|now|next|after that|afterwards)\\b\\W*)+", in: String(segment), with: "")
-            s = Rx.replace("(?:[\\s–—-]+|\\b(?:\(filler))\\b)+$", in: s, with: "").trimmed
-            if s.count >= 3, Rx.test("[a-z]", s) { head = s; break }
-        }
-        // Short enough for one Lock Screen line.
-        var words: [String] = []
-        for word in head.split(separator: " ").map(String.init) {
-            if (words + [word]).joined(separator: " ").count > 32 { break }
-            words.append(word)
-        }
-        while let last = words.last,
-              Rx.test("^(?:the|a|an|and|or|with|in|on|of|to|into|over|for|your|it|until)$", last) || Rx.test("[,;:]$", last) {
-            words.removeLast()
-        }
-        let title = words.joined(separator: " ")
-        guard title.count >= 3, Rx.test("[a-z]", title) else { return RecipeFormatText.capitalisedFirst(passive ?? "timer") }
-        return RecipeFormatText.capitalisedFirst(title)
     }
 
     /// 45 → "45 sec", 90 → "1 ½ min", 600 → "10 min", 5400 → "1 hr 30 min".
