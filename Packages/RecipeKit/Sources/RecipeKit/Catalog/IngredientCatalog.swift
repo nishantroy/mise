@@ -140,13 +140,57 @@ public final class IngredientCatalog: Sendable {
 
     /// Longest catalog alias that appears in `name` as whole words.
     public func match(_ name: String) -> CatalogEntry? {
+        matchWithAlias(name)?.entry
+    }
+
+    func matchWithAlias(_ name: String) -> (entry: CatalogEntry, alias: String)? {
         let norm = Self.normalise(name)
         guard !norm.isEmpty else { return nil }
         let padded = " \(norm) "
         for (alias, id) in aliases where padded.contains(" \(alias) ") {
-            return byID[id]
+            if let entry = byID[id] { return (entry, alias) }
         }
         return nil
+    }
+
+    /// A catalog entry only when the text names it and nothing more (prep words aside):
+    /// "fresh ginger" → ginger, but "soy milk" never falls back to milk. For typed pantry items.
+    public func exactMatch(_ text: String) -> CatalogEntry? {
+        guard let (entry, alias) = matchWithAlias(text) else { return nil }
+        let words = Set(Self.normalisedName(text).split(separator: " ").map(String.init))
+        let aliasWords = Set(alias.split(separator: " ").map(String.init))
+        return words.isSubset(of: aliasWords) ? entry : nil
+    }
+
+    // MARK: Qualifiers
+
+    /// "gluten-free soy sauce", "vegan butter": qualifiers in the ingredient's own name that
+    /// cancel catalog tags. Matched on the normalised name (hyphens become spaces).
+    static let qualifiers: [(phrase: String, removes: Set<IngredientTag>)] = [
+        ("gluten free", [.gluten]),
+        ("dairy free", [.dairy]),
+        ("non dairy", [.dairy]),
+        ("lactose free", []),
+        ("egg free", [.egg]),
+        ("eggless", [.egg]),
+        ("nut free", [.nuts]),
+        ("alcohol free", [.alcohol]),
+        ("non alcoholic", [.alcohol]),
+        ("vegan", [.meat, .pork, .beef, .poultry, .fish, .shellfish, .dairy, .egg, .honey]),
+        ("plant based", [.meat, .pork, .beef, .poultry, .fish, .shellfish, .dairy, .egg, .honey]),
+        ("vegetarian", [.meat, .pork, .beef, .poultry, .fish, .shellfish]),
+        ("meatless", [.meat, .pork, .beef, .poultry]),
+    ]
+
+    /// Catalog tags for an ingredient, minus any its name's qualifiers rule out.
+    public func effectiveTags(for ingredient: Ingredient) -> Set<IngredientTag> {
+        guard let entry = ingredient.catalogID.flatMap(entry(id:)) ?? match(ingredient.name) else { return [] }
+        let padded = " \(Self.normalise(ingredient.name)) "
+        var tags = entry.tags
+        for (phrase, removes) in Self.qualifiers where padded.contains(" \(phrase) ") {
+            tags.subtract(removes)
+        }
+        return tags
     }
 
     /// Catalog ID if matched, otherwise the normalised name without prep words.
@@ -179,10 +223,6 @@ public final class IngredientCatalog: Sendable {
         if let id = ingredient.catalogID, let e = byID[id] { names += e.names }
         return names
     }
-
-    /// All aliases (normalised) that belong to some other entry. Used to protect longer
-    /// names like "dark soy sauce" when rewriting "soy sauce".
-    func allAliases() -> [(alias: String, id: String)] { aliases }
 
     public func displayName(for id: String) -> String { byID[id]?.displayName ?? id }
 

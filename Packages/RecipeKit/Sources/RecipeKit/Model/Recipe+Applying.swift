@@ -38,54 +38,52 @@ extension Recipe {
     }
 }
 
-/// Whole-word, case-insensitive name replacement in step text.
+/// Whole-word, case-insensitive name replacement in step text, done in a single pass so a
+/// new name that contains an old alias ("olive oil" for "oil") is never replaced again.
 enum StepRewriter {
     static func replace(_ names: [String], with replacement: String, in text: String, catalog: IngredientCatalog) -> String {
-        let targets = Array(Set(names.map { $0.lowercased().collapsedWhitespace }.filter { $0.count >= 2 }))
-            .sorted { $0.count > $1.count }  // longer aliases first
+        let targets = Set(names.flatMap { variants(of: $0) }.filter { $0.count >= 2 })
         guard !targets.isEmpty else { return text }
 
-        // Protect longer names that contain a target but aren't one ("dark soy sauce" when
-        // swapping "soy sauce"), by masking them before replacing.
-        let targetSet = Set(targets)
-        var protected: [String] = []
-        for (alias, _) in catalog.allAliases() where !targetSet.contains(alias) {
-            if targets.contains(where: { alias.count > $0.count && " \(alias) ".contains(" \(IngredientCatalog.normalise($0)) ") }) {
-                protected.append(alias)
+        // Longer names from other catalog entries that contain a target as whole words
+        // ("dark soy sauce", "spring onions") are matched too, and left as they are.
+        var protected: Set<String> = []
+        for entry in catalog.entries {
+            for raw in entry.names {
+                for alias in variants(of: raw) where !targets.contains(alias) {
+                    if targets.contains(where: { alias.count > $0.count && " \(alias) ".contains(" \($0) ") }) {
+                        protected.insert(alias)
+                    }
+                }
             }
         }
-        var s = text
-        var masks: [(String, String)] = []
-        for (i, p) in protected.enumerated() {
-            let token = "\u{E000}\(i)\u{E001}"
-            let pattern = "\\b\(Rx.escape(p))\\b"
-            if Rx.test(pattern, s) {
-                // Keep the original casing by capturing the match.
-                for m in Rx.matches(pattern, in: s) { if let found = m[0] { masks.append((token, found)) } }
-                s = Rx.replace(pattern, in: s, with: token)
+        // One alternation, longest first, so each span of text is considered exactly once.
+        let alternatives = (targets.union(protected)).sorted { $0.count != $1.count ? $0.count > $1.count : $0 < $1 }
+        let pattern = "\\b(?:" + alternatives.map(Rx.escape).joined(separator: "|") + ")\\b"
+        let ns = text as NSString
+        var out = ""
+        var cursor = 0
+        for m in Rx.re(pattern).matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor))
+            let found = ns.substring(with: m.range)
+            cursor = m.range.location + m.range.length
+            guard targets.contains(found.lowercased().collapsedWhitespace) else {
+                out += found  // protected longer name
+                continue
             }
+            // Capitalise at the start of a sentence; otherwise use the name as written.
+            let atSentenceStart = out.trimmed.isEmpty || Rx.test("[.!?:]\\s*$", out)
+            out += atSentenceStart ? replacement.prefix(1).uppercased() + replacement.dropFirst() : replacement
         }
-        for target in targets {
-            let pattern = "\\b\(Rx.escape(target))\\b"
-            let matches = Rx.matches(pattern, in: s)
-            guard !matches.isEmpty else { continue }
-            let ns = s as NSString
-            var out = ""
-            var cursor = 0
-            for m in Rx.re(pattern).matches(in: s, range: NSRange(location: 0, length: ns.length)) {
-                out += ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor))
-                // Capitalise at the start of a sentence; otherwise use the name as written.
-                let atSentenceStart = out.trimmed.isEmpty || Rx.test("[.!?:]\\s*$", out)
-                out += atSentenceStart ? replacement.prefix(1).uppercased() + replacement.dropFirst() : replacement
-                cursor = m.range.location + m.range.length
-            }
-            out += ns.substring(from: cursor)
-            s = out
-        }
-        // Unmask. Each token may have been used several times; restore with the first casing seen.
-        var restored: [String: String] = [:]
-        for (token, original) in masks where restored[token] == nil { restored[token] = original }
-        for (token, original) in restored { s = s.replacingOccurrences(of: token, with: original) }
-        return s
+        out += ns.substring(from: cursor)
+        return out
+    }
+
+    /// Lowercased name plus a simple plural or singular form ("onion" / "onions").
+    static func variants(of name: String) -> [String] {
+        let n = name.lowercased().collapsedWhitespace
+        guard !n.isEmpty else { return [] }
+        if n.hasSuffix("s") { return [n, String(n.dropLast())] }
+        return [n, n + "s"]
     }
 }

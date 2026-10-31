@@ -36,7 +36,14 @@ public enum IngredientLineParser {
         // Quantity, including ranges ("1-2", "2 to 3": take the upper bound).
         var quantity: Double?
         if let m = Rx.firstMatch("^(?:about|approx\\.?|approximately|~|scant|heaped)?\\s*(\(number))(?:\\s*(?:-|to)\\s*(\(number)))?(?![\\d/])", in: s) {
-            quantity = value(of: m[2] ?? m[1]!)
+            let lower = value(of: m[1]!)
+            let upper = m[2].flatMap(value(of:))
+            if let lower, let upper, upper < lower {
+                // "1-1/2 cups" is a mixed number written with a hyphen, not a range.
+                quantity = upper < 1 ? lower + upper : lower
+            } else {
+                quantity = upper ?? lower
+            }
             s = String(s.dropFirst(m[0]!.count)).trimmed
         } else if let m = Rx.firstMatch("^(?:a|an|one)\\s+(?=[a-z])", in: s) {
             // "a pinch of salt": only treat "a" as 1 when a unit follows.

@@ -18,7 +18,7 @@ public struct SwapEngine: Sendable {
     public func review(ingredient: Ingredient, pantry: PantrySnapshot, prefs: UserPreferences) -> ReviewItem? {
         let entry = ingredient.catalogID.flatMap(catalog.entry(id:)) ?? catalog.match(ingredient.name)
         let key = entry?.id ?? IngredientCatalog.normalisedName(ingredient.name)
-        let tags = entry?.tags ?? []
+        let tags = catalog.effectiveTags(for: ingredient)
         let spicyScale: Double? = (tags.contains(.spicy) && prefs.spiceLevel <= 1) ? 0.5 : nil
         func item(_ kind: ReviewKind, leaveOut: Bool = false) -> ReviewItem {
             ReviewItem(ingredient: ingredient, kind: kind,
