@@ -19,6 +19,13 @@ Decisions and deviations from `PLAN.md`, plus checks that need a real device.
 - **Quantity formatting:** cooking units use ⅛ ¼ ⅓ ½ ⅔ ¾ glyphs (values ≥ 10 round to whole numbers); g/kg/ml/l/oz/lb use decimals, rounding to the nearest 5 above 100.
 - Extra units beyond the plan's list: dash, slice, stalk, sprig, bunch, handful, inch, piece, packet, fl oz.
 
+- **Catalog size (M2).** `ingredients.json` has 204 entries and `swaps.json` 120 (the plan said ~150 / ~60); more coverage across the owner's cuisines made the swap tables more useful. Both are checked by a test that every swap id exists.
+- **Catalog matching does not strip prep words before matching.** Whole-word, longest-alias containment already ignores extra words, and stripping "chopped"/"crushed" would break aliases like "chopped tomatoes" (canned) and "crushed red pepper". Prep words *are* stripped when building pantry keys for names the catalog doesn't know. Matching also folds diacritics and applies a light singular rule ("onions" → "onion") to both sides.
+- **One review item per ingredient.** Priority: conflict > dislike > missing > have (fine) > specialty/rare ("Do you have X?"). The spicy check is not a separate card when another flag applies; instead every item carries `suggestedScale = 0.5` for spicy ingredients when `spiceLevel <= 1`, and an otherwise-fine spicy ingredient gets a `tooSpicy` card.
+- **Swap ranking bonuses need at least one component**, so "Leave it out" never gets the +3 "all in pantry" bonus vacuously. For conflict, dislike, missing and ask cards, "Leave it out" is appended after the top 3 when the table has it.
+- **Step rewriting** masks longer catalog aliases that contain the target ("dark soy sauce" while swapping "soy sauce"), replaces longer aliases first, and capitalises the new name only at the start of a sentence. Leave-it-out (remove) edits don't touch steps.
+- **Swapped-in ingredient names are the catalog display name** (first alias, lowercase, e.g. "dry sherry").
+
 ## Manual checks (owner, on a device)
 
 (filled in as milestones land)
