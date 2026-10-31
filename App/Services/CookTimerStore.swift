@@ -67,12 +67,12 @@ final class CookTimerStore {
         timers.first { $0.specID == spec.id && !$0.finished }
     }
 
-    /// Starts the chip's timer for `seconds` (default: the spec's upper bound).
-    func start(_ spec: CookTimerSpec, seconds: Int? = nil, now: Date = .now) {
+    /// Starts the chip's timer for its duration (a range's upper bound).
+    func start(_ spec: CookTimerSpec, now: Date = .now) {
         guard running(for: spec) == nil else { return }
         // A finished timer for the same chip makes way for the new one.
         for old in timers where old.specID == spec.id { cancel(old.id) }
-        let duration = TimeInterval(max(seconds ?? spec.seconds, Int(CookTimerAdjust.minimumSeconds)))
+        let duration = TimeInterval(max(spec.seconds, Int(CookTimerAdjust.minimumSeconds)))
         let timer = RunningTimer(specID: spec.id, step: spec.step, name: spec.title, endDate: now.addingTimeInterval(duration))
         timers.append(timer)
         arm(timer)

@@ -20,9 +20,6 @@ struct CookModeView: View {
     @State private var confirmExit = false
     @State private var exitFinishes = false
     @State private var previousIdleSetting = false
-    /// The chip whose "Custom time…" prompt is open.
-    @State private var customTimer: CookTimerSpec?
-    @State private var customText = ""
     private let links: StepIngredientLinker.Links
     private let stepTimers: [[CookTimerSpec]]
 
@@ -63,21 +60,6 @@ struct CookModeView: View {
             Button("Keep cooking", role: .cancel) {}
         } message: {
             Text("Running timers will be cancelled.")
-        }
-        .alert("Custom timer", isPresented: Binding(get: { customTimer != nil }, set: { if !$0 { customTimer = nil } })) {
-            TextField("Minutes", text: $customText)
-                .keyboardType(.numbersAndPunctuation)
-                .accessibilityIdentifier("cook.customTime")
-            Button("Start") {
-                if let spec = customTimer, let seconds = CookTimerAdjust.customSeconds(customText) {
-                    timers.start(spec, seconds: seconds)
-                }
-                customTimer = nil
-            }
-            .disabled(CookTimerAdjust.customSeconds(customText) == nil)
-            Button("Cancel", role: .cancel) { customTimer = nil }
-        } message: {
-            Text("Minutes, like 6 or 2.5, or minutes and seconds, like 1:30.")
         }
         .onAppear {
             previousIdleSetting = UIApplication.shared.isIdleTimerDisabled
@@ -277,8 +259,8 @@ struct CookModeView: View {
         .accessibilityIdentifier("cook.ingredient")
     }
 
-    /// Tap starts the timer (a range's high end); touch and hold offers the low end and a custom
-    /// time. While running: tap stops it, and −1 min / +1 min sit either side.
+    /// Tap starts the timer (a range's high end). While running: tap stops it, and −1 min /
+    /// +1 min sit either side.
     @ViewBuilder
     private func timerChip(_ spec: CookTimerSpec) -> some View {
         if let running = timers.running(for: spec) {
@@ -302,29 +284,11 @@ struct CookModeView: View {
                 }
             }
         } else {
-            Menu {
-                if spec.choices.count > 1, let low = spec.choices.first, let high = spec.choices.last {
-                    Button { timers.start(spec, seconds: low) } label: { Text("\(CookTimers.format(seconds: low)) (low end)") }
-                    Button { timers.start(spec, seconds: high) } label: { Text("\(CookTimers.format(seconds: high)) (high end)") }
-                }
-                Button {
-                    customText = ""
-                    customTimer = spec
-                } label: { Label("Custom time…", systemImage: "slider.horizontal.3") }
-            } label: {
-                chipLabel(icon: "timer", running: false) {
-                    Text(spec.label)
-                    if spec.choices.count > 1 {
-                        Image(systemName: "chevron.up.chevron.down").font(Theme.Fonts.caption).accessibilityHidden(true)
-                    }
-                }
-            } primaryAction: {
-                timers.start(spec)
+            Button { timers.start(spec) } label: {
+                chipLabel(icon: "timer", running: false) { Text(spec.label) }
             }
-            .menuIndicator(.hidden)
             .buttonStyle(.plain)
             .accessibilityLabel("Start \(spec.label) timer")
-            .accessibilityHint(spec.choices.count > 1 ? "Touch and hold to pick the low end or a custom time" : "Touch and hold for a custom time")
             .accessibilityIdentifier("cook.timer.\(spec.position)")
         }
     }

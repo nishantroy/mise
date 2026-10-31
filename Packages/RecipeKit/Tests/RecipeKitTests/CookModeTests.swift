@@ -87,16 +87,16 @@ struct CookTimerTests {
         #expect(timers[2][0].passiveLabel == "marinating")
     }
 
-    @Test func rangesUseTheUpperBoundAndKeepTheLabel() {
+    @Test func rangesUseTheUpperBoundAsOneValue() {
         let t = CookTimers.timers(in: "Cook the onion and bell pepper for 3–4 min. Simmer 2-3 minutes, then rest 30-40 mins.", step: 0)
-        #expect(t.map(\.label) == ["3–4 min", "2–3 min", "30–40 min"])
+        #expect(t.map(\.label) == ["4 min", "3 min", "40 min"])
         #expect(t.map(\.seconds) == [240, 180, 2400])
         #expect(t[2].passiveLabel == "resting")
     }
 
     @Test func secondsToAMinuteIsOneTimer() throws {
         let t = CookTimers.timers(for: try mongolianBeef())[4]
-        #expect(t.map(\.label) == ["1 min", "30 sec", "30 sec–1 min"])
+        #expect(t.map(\.label) == ["1 min", "30 sec", "1 min"])
         #expect(t.map(\.seconds) == [60, 30, 60])
     }
 
@@ -118,15 +118,6 @@ struct CookTimerTests {
         #expect(CookTimers.clock(3725) == "1:02:05")
         #expect(CookTimers.clock(-3) == "0:00")
         #expect(CookTimers.clock(0.2) == "0:01", "rounds up, so 0:00 means done")
-    }
-
-    @Test func rangesOfferTheLowAndHighEnd() throws {
-        let t = CookTimers.timers(in: "Cook the onion and bell pepper for 3–4 min. Simmer 2-3 minutes, then rest 30-40 mins. Bake 1 hour.", step: 0)
-        #expect(t.map(\.lowerSeconds) == [180, 120, 1800, nil])
-        #expect(t.map(\.choices) == [[180, 240], [120, 180], [1800, 2400], [3600]])
-        let words = try #require(CookTimers.timers(for: try mongolianBeef())[4].last)
-        #expect(words.label == "30 sec–1 min")
-        #expect(words.choices == [30, 60])
     }
 
     @Test func titlesComeFromTheWordsBeforeTheTime() throws {
@@ -154,21 +145,6 @@ struct CookTimerTests {
         #expect(CookTimerAdjust.adjusted(remaining: 12 * 3600 - 30, by: 60) == 12 * 3600)
         #expect(CookTimerAdjust.canShorten(remaining: 11))
         #expect(!CookTimerAdjust.canShorten(remaining: 10))
-    }
-
-    @Test func customDurations() {
-        #expect(CookTimerAdjust.customSeconds("5") == 300)
-        #expect(CookTimerAdjust.customSeconds(" 1.5 ") == 90)
-        #expect(CookTimerAdjust.customSeconds("1,5") == 90)
-        #expect(CookTimerAdjust.customSeconds("1 1/2") == 90)
-        #expect(CookTimerAdjust.customSeconds("1:30") == 90)
-        #expect(CookTimerAdjust.customSeconds("0:20") == 20)
-        #expect(CookTimerAdjust.customSeconds("0:05") == nil, "under 10 s")
-        #expect(CookTimerAdjust.customSeconds("1:75") == nil)
-        #expect(CookTimerAdjust.customSeconds("0") == nil)
-        #expect(CookTimerAdjust.customSeconds("abc") == nil)
-        #expect(CookTimerAdjust.customSeconds("") == nil)
-        #expect(CookTimerAdjust.customSeconds("721") == nil, "over 12 h")
     }
 }
 
