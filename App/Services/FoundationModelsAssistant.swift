@@ -95,6 +95,40 @@ struct IngredientExtraction {
     var lines: [String]
 }
 
+@Generable
+enum GeneratedPrepKind {
+    case chopAndPrep, mixAhead, getOut
+}
+
+@Generable(description: "One line of a prep list.")
+struct GeneratedPrepItem {
+    @Guide(description: "A short instruction without any amounts, e.g. \"Thinly slice\" or \"Whisk together for the sauce\".")
+    var action: String
+    @Guide(description: "The ingredients this line covers, named exactly as listed.", .maximumCount(8))
+    var ingredients: [String]
+}
+
+@Generable(description: "A group of prep lines.")
+struct GeneratedPrepGroup {
+    var kind: GeneratedPrepKind
+    @Guide(.maximumCount(10))
+    var items: [GeneratedPrepItem]
+}
+
+@Generable(description: "What to do before cooking: chop and prep, mix ahead, and get out the rest.")
+struct GeneratedPrepPlan {
+    @Guide(.maximumCount(3))
+    var groups: [GeneratedPrepGroup]
+}
+
+@Generable(description: "One recipe step, rewritten.")
+struct GeneratedStepRewrite {
+    @Guide(description: "The number of the step you rewrote.")
+    var stepNumber: Int
+    @Guide(description: "The whole rewritten step.")
+    var text: String
+}
+
 // MARK: - Assistant
 
 /// On-device model assistant. Uses the rules as hints and falls back to them silently on any error.
@@ -202,6 +236,114 @@ struct FoundationModelsAssistant: RecipeAssistant {
         } catch {
             Self.log.error("extractIngredients fell back to rules: \(String(describing: error), privacy: .public)")
             return rules
+        }
+    }
+
+    /// The rules' plan, refined by the model: it groups chopping, mixing and getting things out;
+    /// the rules keep "Start early" (it comes from step times). `PrepPlanner.map` validates the
+    /// answer; anything invalid, any error or a timeout gives the rules' plan.
+    func planPrep(recipe: Recipe) async throws -> PrepPlan {
+        let planner = PrepPlanner()
+        let rules = planner.plan(for: recipe)
+        guard SystemLanguageModel.default.isAvailable, !recipe.ingredients.isEmpty else { return rules }
+        let prompt = Self.prepPrompt(recipe: recipe)
+        do {
+            let plan = try await Self.withTimeout(Self.insightTimeout) {
+                let session = LanguageModelSession(instructions: Self.prepInstructions)
+                return try await session.respond(to: prompt, generating: GeneratedPrepPlan.self,
+                                                 options: GenerationOptions(temperature: 0.2)).content
+            }
+            Self.debugLog("planPrep", prompt: prompt, output: "\(plan)")
+            let proposal = plan.groups.map { group in
+                ProposedPrepGroup(kind: group.kind.prepKind,
+                                  items: group.items.map { ProposedPrepItem(action: $0.action, ingredients: $0.ingredients) })
+            }
+            guard let mapped = planner.map(proposal, recipe: recipe, rules: rules) else {
+                Self.log.info("planPrep: model plan failed validation, using rules")
+                return rules
+            }
+            return mapped
+        } catch {
+            Self.log.error("planPrep fell back to rules: \(String(describing: error), privacy: .public)")
+            return rules
+        }
+    }
+
+    static let prepInstructions = """
+    You write a home cook's prep list (mise en place) for a recipe. \
+    Group the listed ingredients into: chopAndPrep (things to cut, grate, toast or grind), \
+    mixAhead (sauces or mixtures combined before cooking starts), and getOut (everything else). \
+    Each line is a short instruction without amounts plus the ingredients it covers, named exactly as listed. \
+    Use every ingredient once.
+    """
+
+    static func prepPrompt(recipe: Recipe) -> String {
+        let ingredients = recipe.ingredients.prefix(30)
+            .map { "- \($0.name)\($0.note.map { " (\($0))" } ?? "")" }.joined(separator: "\n")
+        let steps = recipe.steps.prefix(10).enumerated()
+            .map { "\($0.offset + 1). \(String($0.element.prefix(140)))" }.joined(separator: "\n")
+        return """
+        Recipe: \(recipe.title)
+        Ingredients:
+        \(ingredients)
+        Steps:
+        \(steps)
+        """
+    }
+
+    /// Single-step rewrites for what `StepRewrites.requests` finds (at most two). Each answer is
+    /// validated in RecipeKit and dropped if it fails; errors drop it too.
+    func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String) async throws -> [StepRewriteProposal] {
+        let requests = StepRewrites.requests(recipe: recipe, edits: edits)
+        guard !requests.isEmpty, SystemLanguageModel.default.isAvailable else { return [] }
+        let after = recipe.applying(edits)
+        var out: [StepRewriteProposal] = []
+        for request in requests {
+            let prompt = Self.rewritePrompt(request, after: after, feedback: feedback)
+            do {
+                let answer = try await Self.withTimeout(Self.insightTimeout) {
+                    let session = LanguageModelSession(instructions: Self.rewriteInstructions)
+                    return try await session.respond(to: prompt, generating: GeneratedStepRewrite.self,
+                                                     options: GenerationOptions(temperature: 0.2)).content
+                }
+                let proposal = StepRewrites.proposal(for: request, stepNumber: answer.stepNumber, text: answer.text,
+                                                     recipe: recipe, edits: edits)
+                Self.debugLog("rewriteStep", prompt: prompt, output: "\(answer) → \(proposal == nil ? "rejected" : "kept")")
+                if let proposal, !out.contains(where: { $0.stepIndex == proposal.stepIndex }) { out.append(proposal) }
+            } catch {
+                Self.log.error("rewriteStep dropped: \(String(describing: error), privacy: .public)")
+            }
+        }
+        return out
+    }
+
+    static let rewriteInstructions = """
+    You fix one step of a home cook's recipe so it reads naturally after an ingredient change. \
+    Rewrite only that one step. Keep every number, time and temperature exactly as written. \
+    Keep it about as long as the original and don't add new instructions.
+    """
+
+    static func rewritePrompt(_ request: StepRewriteRequest, after: Recipe, feedback: String) -> String {
+        switch request.kind {
+        case let .added(ingredient):
+            let steps = after.steps.prefix(12).enumerated()
+                .map { "\($0.offset + 1). \(String($0.element.prefix(200)))" }.joined(separator: "\n")
+            return """
+            Steps:
+            \(steps)
+
+            New ingredient: \(ingredient.displayText)
+            Cook's feedback: \(feedback.isEmpty ? "(none)" : feedback)
+            Pick the one step where the new ingredient is used and rewrite that step so it mentions \(ingredient.name).
+            """
+        case let .replaced(oldNames, newName):
+            let index = request.stepIndex ?? 0
+            return """
+            Step \(index + 1): \(after.steps.indices.contains(index) ? after.steps[index] : "")
+
+            This step was changed to use \(newName) instead of \(oldNames.joined(separator: " and ")), so it now repeats \(newName).
+            Rewrite it so \(newName) is mentioned once, and don't mention \(oldNames.joined(separator: " or ")).
+            """
         }
     }
 
@@ -357,6 +499,16 @@ struct FoundationModelsAssistant: RecipeAssistant {
         #if DEBUG
         log.debug("\(label, privacy: .public) prompt:\n\(prompt, privacy: .public)\noutput:\n\(output, privacy: .public)")
         #endif
+    }
+}
+
+extension GeneratedPrepKind {
+    var prepKind: PrepGroupKind {
+        switch self {
+        case .chopAndPrep: .chopAndPrep
+        case .mixAhead: .mixAhead
+        case .getOut: .getOut
+        }
     }
 }
 

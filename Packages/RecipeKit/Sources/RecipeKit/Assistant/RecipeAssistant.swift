@@ -14,6 +14,12 @@ public protocol RecipeAssistant: Sendable {
     /// Ingredients for a recipe whose amounts are only written inside its steps. Never changes
     /// the steps. A model's answer must go through `ModelIngredientLines` before it's returned.
     func extractIngredients(steps: [String], title: String) async throws -> [Ingredient]
+    /// The "Mise en place" list for cook mode. A model's plan must go through `PrepPlanner.map`.
+    func planPrep(recipe: Recipe) async throws -> PrepPlan
+    /// Rewrites of single steps after proposed `edits` (an added ingredient no step mentions, a
+    /// swap that left a step awkward), validated by `StepRewrites`. Offered unticked. The rules
+    /// have none.
+    func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String) async throws -> [StepRewriteProposal]
 }
 
 extension RecipeAssistant {
@@ -28,5 +34,13 @@ extension RecipeAssistant {
 
     public func extractIngredients(steps: [String], title: String) async throws -> [Ingredient] {
         IngredientCatalog.shared.annotate(Recipe(title: title, ingredients: StepIngredientExtractor.extract(from: steps))).ingredients
+    }
+
+    public func planPrep(recipe: Recipe) async throws -> PrepPlan {
+        PrepPlanner().plan(for: recipe)
+    }
+
+    public func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String) async throws -> [StepRewriteProposal] {
+        []
     }
 }
