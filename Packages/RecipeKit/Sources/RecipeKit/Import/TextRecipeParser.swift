@@ -6,11 +6,15 @@ public enum TextRecipeParser {
     static let ingredientsHeading = "^(?:the\\s+)?ingredients?(?:\\s+(?:for|list)\\b.*)?:?$"
     static let stepsHeading = "^(?:the\\s+)?(?:instructions?|directions?|method|steps?|preparation|procedure|how to (?:make|cook)(?: it)?|to make)(?:\\s+for\\b.*)?:?$"
     static let endHeading = "^(?:notes?|tips?|notes,? tips.*|nutrition.*|serving suggestions?|storage|video|equipment|variations?|faqs?|warnings?|recipe notes?)\\b.*:?$"
+    /// Wiki section-edit links ("edit", "[edit]", "[edit | edit source]") render as their own lines.
+    static let editLink = "^\\[?\\s*edit(?:\\s+source)?(?:\\s*\\|\\s*edit source)?\\s*\\]?$"
 
     public static func parse(html: String, url: URL?) -> Recipe? {
         let title = HTMLText.metaContent("og:title", in: html) ?? HTMLText.titleTag(in: html)
-        let lines = HTMLText.lines(fromHTML: html)
-        return parse(lines: lines, title: title.map(cleanTitle), url: url)
+        let lines = HTMLText.lines(fromHTML: html).filter { !Rx.test(editLink, $0.text.lowercased()) }
+        guard var recipe = parse(lines: lines, title: title.map(cleanTitle), url: url) else { return nil }
+        recipe.imageURL = HTMLText.metaContent("og:image", in: html).flatMap { URL(string: $0, relativeTo: url)?.absoluteURL }
+        return recipe
     }
 
     /// Pasted text. The first line is the title unless it's a heading.
@@ -88,10 +92,15 @@ public enum TextRecipeParser {
         Rx.replace("^[\\-–•*▢□☐·]+\\s*", in: text, with: "").trimmed
     }
 
-    /// "Chow Mein - RecipeTin Eats" → "Chow Mein". Only strips a short trailing site name.
+    /// "Chow Mein - RecipeTin Eats" → "Chow Mein". Only strips a short trailing site name,
+    /// and a wiki namespace prefix ("Cookbook:Kung Pao Chicken" → "Kung Pao Chicken").
     static func cleanTitle(_ title: String) -> String {
+        var title = title
         if let m = Rx.firstMatch("^(.+?)\\s+[-|–—]\\s+[^-|–—]{2,60}$", in: title), let head = m[1], head.count >= 3 {
-            return head.trimmed
+            title = head.trimmed
+        }
+        if let m = Rx.firstMatch("^[A-Z][A-Za-z]+:(\\S.*)$", in: title), let rest = m[1] {
+            title = rest
         }
         return title
     }

@@ -28,7 +28,10 @@ struct FixtureImportTests {
         .init(fixture: "recipetineats-chow-mein", title: "Chow Mein",
               ingredients: 16, steps: 11, servings: 2, minutes: 15),
         // No JSON-LD: text fallback with <h2>/<h3> headings and an infobox
-        .init(fixture: "wikibooks-kung-pao-chicken", title: "Cookbook:Kung Pao Chicken",
+        .init(fixture: "wikibooks-kung-pao-chicken", title: "Kung Pao Chicken",
+              ingredients: 22, steps: 11, servings: 4, minutes: nil),
+        // Same page as the phone gets it: mobile skin with "edit" links beside each heading
+        .init(fixture: "wikibooks-kung-pao-chicken-mobile", title: "Kung Pao Chicken",
               ingredients: 22, steps: 11, servings: 4, minutes: nil),
     ]
 
@@ -97,6 +100,29 @@ struct FixtureImportTests {
         #expect(!recipe.ingredients.contains { $0.name == "Spices" })  // sub-headings skipped
         #expect(recipe.steps.first == "Measure and prepare all ingredients before cooking.")
         #expect(recipe.steps.last == "Pour onto large platter and serve immediately.")
+    }
+
+    @Test func wikibooksMobileSkipsEditLinks() throws {
+        let recipe = try #require(RecipeImporter.parse(html: try Fixture.html("wikibooks-kung-pao-chicken-mobile"), url: nil))
+        #expect(!recipe.ingredients.contains { $0.raw.lowercased() == "edit" })
+        #expect(!recipe.steps.contains { $0.lowercased() == "edit" })
+        #expect(recipe.steps.first == "Measure and prepare all ingredients before cooking.")
+        #expect(recipe.imageURL == nil)  // the page has no og:image
+    }
+
+    @Test func textFallbackTakesOGImage() throws {
+        let html = """
+        <html><head><title>Toast - Example</title><meta property="og:image" content="/img/toast.jpg"></head><body>
+        <h2>Ingredients</h2><ul><li>2 slices bread</li></ul><h2>Method</h2><ol><li>Toast the bread.</li></ol></body></html>
+        """
+        let recipe = try #require(RecipeImporter.parse(html: html, url: URL(string: "https://example.com/r/toast")))
+        #expect(recipe.title == "Toast")
+        #expect(recipe.imageURL?.absoluteString == "https://example.com/img/toast.jpg")
+    }
+
+    @Test func cleanTitleKeepsOrdinaryColons() {
+        #expect(TextRecipeParser.cleanTitle("Cookbook:Kung Pao Chicken - Wikibooks, open books for an open world") == "Kung Pao Chicken")
+        #expect(TextRecipeParser.cleanTitle("Dal: A Weeknight Version") == "Dal: A Weeknight Version")
     }
 
     @Test func returnsNilForNonRecipePage() {

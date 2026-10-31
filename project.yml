@@ -9,7 +9,7 @@ options:
 settings:
   base:
     # Owner: set these before building to a device (see README).
-    DEVELOPMENT_TEAM: ""
+    DEVELOPMENT_TEAM: RUQVKZ77U5
     BUNDLE_ID_BASE: com.nishantroy.mise
     APP_GROUP_ID: group.com.nishantroy.mise
     MARKETING_VERSION: "1.0"
