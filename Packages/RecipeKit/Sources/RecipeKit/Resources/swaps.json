@@ -121,5 +121,8 @@
   {"for": "gram-flour", "options": [{"use": [{"id": "flour", "ratio": 1}], "quality": "ok", "note": "Different texture"}]},
   {"for": "flour", "options": [{"use": [{"id": "gluten-free-flour", "ratio": 1}], "quality": "good", "note": "Gluten-free; add a little extra liquid if the batter is stiff"}, {"use": [{"id": "rice-flour", "ratio": 1}], "quality": "ok", "note": "Gluten-free; best for thickening and batters"}]},
   {"for": "soy-milk", "options": [{"use": [{"id": "oat-milk", "ratio": 1}], "quality": "great", "note": "Very close"}, {"use": [{"id": "milk", "ratio": 1}], "quality": "good", "note": "Not dairy-free"}]},
-  {"for": "oat-milk", "options": [{"use": [{"id": "soy-milk", "ratio": 1}], "quality": "great", "note": "Very close"}, {"use": [{"id": "milk", "ratio": 1}], "quality": "good", "note": "Not dairy-free"}]}
+  {"for": "oat-milk", "options": [{"use": [{"id": "soy-milk", "ratio": 1}], "quality": "great", "note": "Very close"}, {"use": [{"id": "milk", "ratio": 1}], "quality": "good", "note": "Not dairy-free"}]},
+  {"for": "pancetta", "options": [{"use": [{"id": "bacon", "ratio": 1}], "quality": "great", "note": "Unsmoked streaky bacon is closest"}, {"use": [{"id": "smoked-paprika", "amount": "½ tsp"}], "quality": "ok", "note": "For the savoury, smoky note"}, {"use": [], "quality": "ok", "note": "Leave it out"}]},
+  {"for": "masa-harina", "options": [{"use": [{"id": "cornmeal", "ratio": 1}], "quality": "ok", "note": "Fine cornmeal; grittier and won't bind as well"}]},
+  {"for": "tomatillo", "options": [{"use": [{"id": "tomato", "ratio": 1}, {"id": "lime-juice", "amount": "1 tbsp per cup"}], "quality": "ok", "note": "Green, under-ripe tomatoes are better if you can find them"}]}
 ]
