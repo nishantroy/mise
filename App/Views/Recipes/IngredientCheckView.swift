@@ -24,6 +24,15 @@ struct IngredientCheckView: View {
     /// Spicy ingredients the user agreed to halve.
     @State private var halved: Set<UUID> = []
     @State private var prefs = UserPreferences()
+    @State private var checkingSteps = false
+    @State private var rewriteReview: RewriteReview?
+
+    /// The chosen swaps plus the model's step rewrites, waiting for the user to pick rewrites.
+    struct RewriteReview: Identifiable {
+        let id = UUID()
+        let edits: [RecipeEdit]
+        var rewrites: [EditProposal]
+    }
 
     var body: some View {
         ScrollView {
@@ -44,9 +53,25 @@ struct IngredientCheckView: View {
             .padding(.vertical, Theme.Spacing.m)
         }
         .miseScreenBackground()
+        .sheet(item: $rewriteReview) { review in
+            NavigationStack {
+                RewriteReviewView(review: review) { chosen in
+                    rewriteReview = nil
+                    finishSave(review.edits + chosen)
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
         .safeAreaInset(edge: .bottom) {
-            Button(existing == nil ? "Save recipe" : "Save changes", action: save)
+            Button(action: save) {
+                if checkingSteps {
+                    HStack(spacing: Theme.Spacing.xs) { ProgressView().tint(Color.mise.onAccent); Text("Checking steps…") }
+                } else {
+                    Text(existing == nil ? "Save recipe" : "Save changes")
+                }
+            }
                 .buttonStyle(.misePrimary)
+                .disabled(checkingSteps)
                 .padding(.horizontal, Theme.Spacing.gutter)
                 .padding(.vertical, Theme.Spacing.s)
                 .background(Color.mise.background)
@@ -240,8 +265,30 @@ struct IngredientCheckView: View {
         return edits
     }
 
+    /// Save: with the model on, a swap that leaves a step awkward first gets a chance at a
+    /// one-step rewrite, shown old → new and unticked. Otherwise saves straight away.
     private func save() {
         let edits = edits()
+        guard provider.usesModel, !StepRewrites.requests(recipe: recipe, edits: edits).isEmpty else {
+            finishSave(edits)
+            return
+        }
+        let assistant = provider.assistant
+        checkingSteps = true
+        Task {
+            let found = (try? await assistant.proposeStepRewrites(recipe: recipe, edits: edits, feedback: "")) ?? []
+            checkingSteps = false
+            if found.isEmpty {
+                finishSave(edits)
+            } else {
+                rewriteReview = RewriteReview(edits: edits, rewrites: found.map {
+                    EditProposal(edit: $0.edit, summary: "Reword step \($0.stepIndex + 1)", included: false, rewrite: $0)
+                })
+            }
+        }
+    }
+
+    private func finishSave(_ edits: [RecipeEdit]) {
         if let existing {
             if !edits.isEmpty { existing.apply(edits) }
             try? context.save()
@@ -255,6 +302,44 @@ struct IngredientCheckView: View {
             try? context.save()
             onSaved(saved)
         }
+    }
+}
+
+/// After a swap: the model's suggested rewrites of awkward steps, each unticked, then save.
+private struct RewriteReviewView: View {
+    @State var review: IngredientCheckView.RewriteReview
+    let onSave: ([RecipeEdit]) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                Text("Tidy up the steps?").serifTitle().accessibilityAddTraits(.isHeader)
+                Text("Your swap left these steps reading oddly. Tick a rewrite to use it.")
+                    .font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
+                MiseCard {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                        ForEach(Array(review.rewrites.enumerated()), id: \.element.id) { index, proposal in
+                            if let rewrite = proposal.rewrite {
+                                RewriteToggle(rewrite: rewrite, isOn: $review.rewrites[index].included,
+                                              identifier: "review.rewrite.\(rewrite.stepIndex)")
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.gutter)
+            .padding(.vertical, Theme.Spacing.m)
+        }
+        .miseScreenBackground()
+        .safeAreaInset(edge: .bottom) {
+            Button("Save") { onSave(review.rewrites.filter(\.included).map(\.edit)) }
+                .buttonStyle(.misePrimary)
+                .padding(.horizontal, Theme.Spacing.gutter)
+                .padding(.vertical, Theme.Spacing.s)
+                .background(Color.mise.background)
+                .accessibilityIdentifier("review.rewriteSave")
+        }
+        .interactiveDismissDisabled()
     }
 }
 

@@ -19,6 +19,8 @@ struct AdjustRecipeView: View {
     /// The feedback the current proposals were made from.
     @State private var proposedFor = ""
     @State private var isThinking = false
+    /// Waiting for the model's step rewrites (shown below the edits).
+    @State private var isRewording = false
     @State private var assistantName = ""
 
     static let quickChips = ["Too salty", "Too spicy", "Too bland", "Needed more time", "Perfect"]
@@ -126,10 +128,22 @@ struct AdjustRecipeView: View {
             } else {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     ForEach(Array(list.enumerated()), id: \.element.id) { index, proposal in
-                        ProposalToggle(text: proposal.summary,
-                                       isOn: Binding(get: { proposals?[index].included ?? false },
-                                                     set: { proposals?[index].included = $0 }),
-                                       identifier: "adjust.edit.\(index)")
+                        let isOn = Binding(get: { proposals?[index].included ?? false },
+                                           set: { proposals?.setIncluded($0, at: index) })
+                        if let rewrite = proposal.rewrite {
+                            RewriteToggle(rewrite: rewrite, isOn: isOn, isAvailable: list.isAvailable(proposal),
+                                          identifier: "adjust.rewrite.\(rewrite.stepIndex)")
+                        } else {
+                            ProposalToggle(text: proposal.summary, isOn: isOn, identifier: "adjust.edit.\(index)")
+                        }
+                    }
+                    if isRewording {
+                        HStack(spacing: Theme.Spacing.xs) {
+                            ProgressView()
+                            Text("Checking whether any step needs rewording…")
+                        }
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Color.mise.inkSecondary)
                     }
                     Text("Untick anything you don't want. Suggested by \(assistantName).")
                         .font(Theme.Fonts.caption)
@@ -160,15 +174,26 @@ struct AdjustRecipeView: View {
                 edits = (try? await rules.proposeEdits(recipe: recipe, feedback: feedback, prefs: prefs)) ?? []
                 name = rules.displayName
             }
-            proposals = edits.map { EditProposal(edit: $0, summary: $0.summary(in: recipe)) }
+            let base = edits.map { EditProposal(edit: $0, summary: $0.summary(in: recipe)) }
+            proposals = base
             proposedFor = feedback
             assistantName = name
             isThinking = false
+
+            // The model may reword one step per edit (an added ingredient no step mentions, a swap
+            // that reads awkwardly). Offered unticked, after the edits; the rules offer none.
+            guard !edits.isEmpty else { return }
+            isRewording = true
+            let rewrites = (try? await assistant.proposeStepRewrites(recipe: recipe, edits: edits, feedback: feedback)) ?? []
+            isRewording = false
+            guard proposedFor == feedback, !rewrites.isEmpty, var current = proposals else { return }
+            current += [EditProposal].rewrites(rewrites, dependingOn: base)
+            proposals = current
         }
     }
 
     private func save() {
-        var edits = (proposals ?? []).filter(\.included).map(\.edit)
+        var edits = (proposals ?? []).chosenEdits
         // Feedback typed but never turned into suggestions is kept as a note, so nothing is lost.
         let pending = feedback
         if !pending.isEmpty && (proposals == nil || pending != proposedFor) {
