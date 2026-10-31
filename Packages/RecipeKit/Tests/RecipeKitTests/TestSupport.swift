@@ -8,4 +8,11 @@ enum Fixture {
         }
         return try String(contentsOf: url, encoding: .utf8)
     }
+
+    static func text(_ name: String) throws -> String {
+        guard let url = Bundle.module.url(forResource: name, withExtension: "txt", subdirectory: "Fixtures") else {
+            throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: name])
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
 }

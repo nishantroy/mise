@@ -11,6 +11,9 @@ public protocol RecipeAssistant: Sendable {
     func guessCuisine(recipe: Recipe) async throws -> String?
     /// A realistic time estimate. The rules do the arithmetic; a model may only fill gaps.
     func estimateTime(recipe: Recipe) async throws -> TimeEstimate
+    /// Ingredients for a recipe whose amounts are only written inside its steps. Never changes
+    /// the steps. A model's answer must go through `ModelIngredientLines` before it's returned.
+    func extractIngredients(steps: [String], title: String) async throws -> [Ingredient]
 }
 
 extension RecipeAssistant {
@@ -21,5 +24,9 @@ extension RecipeAssistant {
 
     public func estimateTime(recipe: Recipe) async throws -> TimeEstimate {
         TimeEstimator().estimate(recipe)
+    }
+
+    public func extractIngredients(steps: [String], title: String) async throws -> [Ingredient] {
+        IngredientCatalog.shared.annotate(Recipe(title: title, ingredients: StepIngredientExtractor.extract(from: steps))).ingredients
     }
 }

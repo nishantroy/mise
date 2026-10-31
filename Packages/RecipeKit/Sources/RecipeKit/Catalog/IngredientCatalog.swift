@@ -19,6 +19,9 @@ public struct CatalogEntry: Codable, Hashable, Sendable, Identifiable {
     public var cuisines: [String]? = nil
     /// Vote weight per listed cuisine. Defaults to 3 for a single cuisine, 1 when several share it.
     public var cuisineWeight: Int? = nil
+    /// Catalog IDs this entry stands in for together ("ginger-garlic-paste" replaces ginger and
+    /// garlic). Lets a diff pair several removed ingredients with one added one.
+    public var replaces: [String]? = nil
 
     /// The first alias, used when an ingredient is written into a recipe.
     public var displayName: String { names.first ?? id }

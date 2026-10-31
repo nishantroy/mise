@@ -4,16 +4,27 @@ extension RecipeEdit {
     /// One-line, human summary, e.g. "Swapped Shaoxing wine for dry sherry".
     public func summary(in recipe: Recipe) -> String {
         switch self {
-        case let .replaceIngredient(id, replacements, _):
-            let old = recipe.ingredient(id: id)?.name ?? "an ingredient"
+        case let .replaceIngredient(id, replacements, reason):
+            let oldIngredient = recipe.ingredient(id: id)
+            let old = oldIngredient?.name ?? "an ingredient"
+            if replacements.isEmpty { return "Leave out \(old)" }
+            if reason == RecipeEdit.amountChangeReason, replacements.count == 1, let oldIngredient {
+                let from = Self.amount(oldIngredient) ?? "some"
+                let to = Self.amount(replacements[0]) ?? "some"
+                return "Change \(old): \(from) → \(to)"
+            }
+            return "Swapped \(old) for \(replacements.map(\.name).joined(separator: " and "))"
+        case let .replaceIngredients(ids, replacements, _):
+            let olds = ids.compactMap { recipe.ingredient(id: $0)?.name }
+            let old = olds.isEmpty ? "some ingredients" : Self.list(olds)
             if replacements.isEmpty { return "Leave out \(old)" }
             return "Swapped \(old) for \(replacements.map(\.name).joined(separator: " and "))"
         case let .scaleIngredient(id, factor):
             guard let ing = recipe.ingredient(id: id) else { return "Change an ingredient amount" }
             let lead: String
-            if factor <= 0.5 + 1e-9 { lead = "Half the" }
+            if abs(factor - 0.5) < 0.02 { lead = "Half the" }
             else if factor < 1 { lead = "Less" }
-            else if factor >= 2 - 1e-9 { lead = "Double the" }
+            else if abs(factor - 2) < 0.02 { lead = "Double the" }
             else { lead = "More" }
             var text = "\(lead) \(ing.name)"
             if let q = ing.quantity {
@@ -23,14 +34,35 @@ extension RecipeEdit {
             }
             return text
         case let .removeIngredient(id):
-            return "Leave out \(recipe.ingredient(id: id)?.name ?? "an ingredient")"
+            guard let ing = recipe.ingredient(id: id) else { return "Leave out an ingredient" }
+            // Two lines with the same name (marinade and sauce): say which one.
+            let duplicated = recipe.ingredients.contains {
+                $0.id != id && $0.name.lowercased() == ing.name.lowercased()
+            }
+            if duplicated, let amount = Self.amount(ing) { return "Leave out \(ing.name) (\(amount))" }
+            return "Leave out \(ing.name)"
         case let .addIngredient(ing):
             return "Add \(ing.displayText)"
         case let .updateStep(index, text):
             return "Step \(index + 1): \(text)"
         case let .addNote(note):
             return "Note: \(note)"
+        case let .replaceSteps(steps):
+            return "Use your steps (\(steps.count) \(steps.count == 1 ? "step" : "steps"))"
         }
+    }
+
+    /// "¼ cup", "3", or nil without a quantity.
+    static func amount(_ ing: Ingredient) -> String? {
+        guard let q = ing.quantity else { return nil }
+        let unit = ing.unit.map { " " + Units.display($0, quantity: q) } ?? ""
+        return QuantityFormatter.string(from: q, unit: ing.unit) + unit
+    }
+
+    /// "a", "a and b", "a, b and c".
+    static func list(_ items: [String]) -> String {
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " and " + items.last!
     }
 }
 

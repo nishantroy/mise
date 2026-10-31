@@ -7,11 +7,12 @@ extension Recipe {
         var recipe = self
         for edit in edits {
             switch edit {
-            case let .replaceIngredient(id, replacements, _):
+            case let .replaceIngredient(id, replacements, reason):
                 guard let index = recipe.ingredients.firstIndex(where: { $0.id == id }) else { continue }
                 let old = recipe.ingredients[index]
                 recipe.ingredients.replaceSubrange(index...index, with: replacements)
-                if !replacements.isEmpty {
+                // An amount change keeps the ingredient, so the steps already name it.
+                if !replacements.isEmpty && reason != RecipeEdit.amountChangeReason {
                     let newName = replacements.map(\.name).joined(separator: " and ")
                     recipe.steps = recipe.steps.map {
                         StepRewriter.replace(catalog.aliases(for: old), with: newName, in: $0, catalog: catalog)
@@ -32,6 +33,20 @@ extension Recipe {
                 }
             case let .addNote(note):
                 recipe.notes.append(note)
+            case let .replaceIngredients(ids, replacements, _):
+                let olds = recipe.ingredients.filter { ids.contains($0.id) }
+                guard let index = recipe.ingredients.firstIndex(where: { ids.contains($0.id) }) else { continue }
+                recipe.ingredients.removeAll { ids.contains($0.id) }
+                recipe.ingredients.insert(contentsOf: replacements, at: min(index, recipe.ingredients.count))
+                if !replacements.isEmpty {
+                    let newName = replacements.map(\.name).joined(separator: " and ")
+                    let names = olds.flatMap { catalog.aliases(for: $0) }
+                    recipe.steps = recipe.steps.map {
+                        StepRewriter.replace(names, with: newName, in: $0, catalog: catalog)
+                    }
+                }
+            case let .replaceSteps(steps):
+                recipe.steps = steps
             }
         }
         return recipe

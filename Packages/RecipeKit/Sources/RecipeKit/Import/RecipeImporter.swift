@@ -8,12 +8,30 @@ public enum RecipeImporter {
         parseUnannotated(html: html, url: url).map(catalog.annotate)
     }
 
-    /// Recipe text pasted by the user. Falls back to HTML parsing if it looks like markup.
+    /// Recipe text pasted by the user. Falls back to HTML parsing if it looks like markup, and to
+    /// step-style parsing (ingredients written inside the steps) when there's no "Ingredients" heading.
     public static func parse(text: String, catalog: IngredientCatalog = .shared) -> Recipe? {
+        parsePasted(text: text, catalog: catalog)?.recipe
+    }
+
+    /// A parsed paste, and whether its ingredients were pulled out of the steps (so a model may
+    /// be asked to extract them better; see `ModelIngredientLines`).
+    public struct PastedRecipe: Hashable, Sendable {
+        public var recipe: Recipe
+        public var ingredientsFromSteps: Bool
+    }
+
+    public static func parsePasted(text: String, catalog: IngredientCatalog = .shared) -> PastedRecipe? {
         if text.contains("</") || text.contains("application/ld+json") {
-            return parse(html: text, url: nil, catalog: catalog)
+            return parse(html: text, url: nil, catalog: catalog).map { PastedRecipe(recipe: $0, ingredientsFromSteps: false) }
         }
-        return TextRecipeParser.parse(text: text).map(catalog.annotate)
+        if let recipe = TextRecipeParser.parse(text: text) {
+            return PastedRecipe(recipe: catalog.annotate(recipe), ingredientsFromSteps: false)
+        }
+        if let recipe = StepStyleParser.parse(text: text) {
+            return PastedRecipe(recipe: catalog.annotate(recipe), ingredientsFromSteps: true)
+        }
+        return nil
     }
 
     static func parseUnannotated(html: String, url: URL?) -> Recipe? {

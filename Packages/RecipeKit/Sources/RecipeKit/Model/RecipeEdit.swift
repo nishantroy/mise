@@ -1,5 +1,7 @@
 import Foundation
 
+/// One change to a recipe. Stored in revisions as JSON (synthesised `Codable`), so cases may be
+/// added but existing cases and their labels must never change: old revisions have to decode.
 public enum RecipeEdit: Codable, Hashable, Sendable {
     case replaceIngredient(id: UUID, with: [Ingredient], reason: String?)
     case scaleIngredient(id: UUID, factor: Double)
@@ -7,6 +9,15 @@ public enum RecipeEdit: Codable, Hashable, Sendable {
     case addIngredient(Ingredient)
     case updateStep(index: Int, text: String)
     case addNote(String)
+    /// Several ingredients replaced by one set ("fresh ginger" + "garlic" → "ginger garlic paste").
+    /// Added after v1.
+    case replaceIngredients(ids: [UUID], with: [Ingredient], reason: String?)
+    /// The whole step list replaced by the user's own steps ("Paste my version"). Added after v1.
+    case replaceSteps([String])
+
+    /// `reason` on a `replaceIngredient` that only changes the amount (the user's version uses a
+    /// different unit, so it can't be a scale). The summary reads "Change X: ¼ cup → 1 tbsp".
+    public static let amountChangeReason = "Amount from your version"
 }
 
 /// One saved change set: what the user accepted, when, and a human summary.

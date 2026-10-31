@@ -79,11 +79,15 @@ public struct ProposedEdit: Hashable, Sendable {
 }
 
 extension RecipeEdit {
-    /// The ingredient an edit changes, if any.
-    public var targetID: UUID? {
+    /// The ingredient an edit changes, if any (the first, for a multi-replace).
+    public var targetID: UUID? { targetIDs.first }
+
+    /// Every existing ingredient an edit changes.
+    public var targetIDs: [UUID] {
         switch self {
-        case .replaceIngredient(let id, _, _), .scaleIngredient(let id, _), .removeIngredient(let id): id
-        default: nil
+        case .replaceIngredient(let id, _, _), .scaleIngredient(let id, _), .removeIngredient(let id): [id]
+        case .replaceIngredients(let ids, _, _): ids
+        default: []
         }
     }
 }
