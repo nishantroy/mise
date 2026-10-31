@@ -26,6 +26,12 @@ Decisions and deviations from `PLAN.md`, plus checks that need a real device.
 - **Step rewriting** masks longer catalog aliases that contain the target ("dark soy sauce" while swapping "soy sauce"), replaces longer aliases first, and capitalises the new name only at the start of a sentence. Leave-it-out (remove) edits don't touch steps.
 - **Swapped-in ingredient names are the catalog display name** (first alias, lowercase, e.g. "dry sherry").
 
+- **Feedback clause splitting (M3).** Sentences split on `. ! ? ;` and newlines; clauses on commas and "but / so / then / because", and on "and" only when a new clause follows ("…breast and it was too salty"), so "skipped the cilantro and sesame oil" stays one list.
+- **"Too salty" with several salty ingredients** produces one edit per ingredient (salt, soy sauce, dark soy, tamari, fish sauce). So the plan's mixed sentence gives exactly 3 edits on a recipe with one salty ingredient (tested on a simple recipe and on the RecipeTin chow mein fixture); on a recipe with both soy sauce and "salt to taste" it gives 4 (scale + "Use less salt than last time" note, per amendment 6). Taste rules with no matching ingredient fall back to a note.
+- **Removals and scalings are all-or-nothing over a list**: every item must match a recipe ingredient, otherwise the clause becomes a note (covers amendment 11 for "no problem" etc.). Pure filler ("no changes", "nothing", "ok") is dropped rather than saved as a note.
+- **"added X" where X is already in the recipe** (and X has no amount) becomes "more X" (×1.25).
+- **Edit summaries** show amounts where known: "Less soy sauce: 2 tbsp → 1 ½ tbsp".
+
 ## Manual checks (owner, on a device)
 
 (filled in as milestones land)
