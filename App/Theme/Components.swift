@@ -301,6 +301,7 @@ struct RecipeCard: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 }
@@ -324,6 +325,11 @@ struct RecipeImage: View {
                     placeholder
                 }
             }
+            // A fill-scaled photo overflows its frame. Clipping only hides the overflow, it still
+            // takes taps, so it would steal taps meant for neighbouring cards and controls.
+            .clipped()
+            .contentShape(Rectangle())
+            .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
 

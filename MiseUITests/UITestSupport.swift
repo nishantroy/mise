@@ -52,6 +52,28 @@ enum StubPages {
     static let notARecipe = "https://example.test/not-a-recipe"
     /// Shaoxing wine listed twice (marinade and sauce).
     static let twiceWine = "https://example.test/twice-wine"
+    /// Recipes whose photo is much taller than the card's 16:10 frame.
+    static let tallPhotoA = "https://example.test/tall-photo-a"
+    static let tallPhotoB = "https://example.test/tall-photo-b"
+
+    /// A 20×120 PNG as a data: URL, so fill-scaled photos overflow without hitting the network.
+    static let tallImageDataURL: String = {
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 20, height: 120)).pngData { ctx in
+            UIColor.systemTeal.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 20, height: 120))
+        }
+        return "data:image/png;base64," + png.base64EncodedString()
+    }()
+
+    static func tallPhotoPage(_ name: String) -> String {
+        """
+        <html><head><script type="application/ld+json">
+        {"@type":"Recipe","name":"\(name)","image":"\(tallImageDataURL)","recipeYield":"2",
+         "recipeIngredient":["2 slices bread","1 tbsp butter"],
+         "recipeInstructions":["Toast the bread.","Butter it."]}
+        </script></head><body></body></html>
+        """
+    }
 
     /// Launch environment serving fixture HTML for the stub URLs.
     static func environment() -> [String: String] {
@@ -75,6 +97,8 @@ enum StubPages {
              "recipeInstructions":["Marinate the chicken in the Shaoxing wine and soy sauce.","Cook, then splash in the rest of the Shaoxing wine."]}
             </script></head><body></body></html>
             """,
+            tallPhotoA: tallPhotoPage("Tall Photo One"),
+            tallPhotoB: tallPhotoPage("Tall Photo Two"),
         ]
         let data = try! JSONEncoder().encode(pages)
         return ["MISE_STUB_PAGES": String(decoding: data, as: UTF8.self)]

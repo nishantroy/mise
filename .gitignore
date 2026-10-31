@@ -13,3 +13,6 @@ xcuserdata/
 *.xcuserstate
 
 .DS_Store
+
+# Claude Code agent worktrees and local settings
+.claude/
