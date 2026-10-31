@@ -95,6 +95,18 @@ struct IngredientExtraction {
     var lines: [String]
 }
 
+@Generable(description: "A recipe put together from a home cook's write-up.")
+struct AssembledRecipe {
+    @Guide(description: "How many people it serves, as the write-up says. 0 if it doesn't say.", .range(0...24))
+    var servings: Int
+    @Guide(description: "Every ingredient, once, with the amount and unit written in the steps, e.g. \"1 tbsp sherry\" or \"1–2 Fresno chilies, sliced into rings\". Ingredients only.", .maximumCount(40))
+    var ingredients: [String]
+    @Guide(description: "The instructions in order, one per step, with every number, time and temperature exactly as written. No section headings, no commentary.", .maximumCount(20))
+    var steps: [String]
+    @Guide(description: "Tips or variations for next time, e.g. \"For more heat, add another chili.\" Never explanations of why something was changed. Empty if there are none.", .maximumCount(4))
+    var notes: [String]
+}
+
 @Generable
 enum GeneratedPrepKind {
     case chopAndPrep, mixAhead, getOut
@@ -238,6 +250,49 @@ struct FoundationModelsAssistant: RecipeAssistant {
             return rules
         }
     }
+
+    /// The whole recipe from a pasted write-up (often markdown from a chat assistant, with the
+    /// amounts only in the steps). The model assembles ingredients, steps, notes and servings;
+    /// `RecipeAssembly.merge` validates each part against the paste and keeps the rules' version
+    /// of any part that fails. Errors or a timeout give the rules' recipe.
+    func assembleRecipe(text: String, rules: Recipe) async throws -> Recipe {
+        guard SystemLanguageModel.default.isAvailable else { return rules }
+        let prompt = Self.assemblyPrompt(text: text)
+        do {
+            let answer = try await Self.withTimeout(Self.assemblyTimeout) {
+                let session = LanguageModelSession(instructions: Self.assemblyInstructions)
+                return try await session.respond(to: prompt, generating: AssembledRecipe.self,
+                                                 options: GenerationOptions(temperature: 0)).content
+            }
+            let proposal = ProposedRecipe(servings: answer.servings, ingredients: answer.ingredients,
+                                          steps: answer.steps, notes: answer.notes)
+            let result = RecipeAssembly.merge(proposal, text: text, rules: rules)
+            Self.debugLog("assembleRecipe", prompt: prompt,
+                          output: "\(answer) → model steps \(result.usedModelSteps), ingredients \(result.usedModelIngredients), notes \(result.usedModelNotes)")
+            return result.recipe
+        } catch {
+            Self.log.error("assembleRecipe fell back to rules: \(String(describing: error), privacy: .public)")
+            return rules
+        }
+    }
+
+    static let assemblyInstructions = """
+    You turn a home cook's recipe write-up into a structured recipe. The write-up may be markdown \
+    from a chat assistant, with section headings, bullet points and some commentary. \
+    There is no ingredient list: build one from the amounts written in the steps, each ingredient once, \
+    with its amount and unit exactly as written. \
+    Keep the cook's steps in order, one instruction per step, with every number, time and temperature \
+    exactly as written. Don't add steps, and leave out section headings. \
+    Tips and variations ("if you want…", "for more heat…") are notes, not steps. \
+    Leave out commentary that explains why changes were made, and any chat.
+    """
+
+    static func assemblyPrompt(text: String) -> String {
+        "Write-up:\n\(String(text.prefix(4000)))"
+    }
+
+    /// A whole recipe is a longer answer than the other calls.
+    static let assemblyTimeout: Duration = .seconds(25)
 
     /// The rules' plan, refined by the model: it groups chopping, mixing and getting things out;
     /// the rules keep "Start early" (it comes from step times). `PrepPlanner.map` validates the
