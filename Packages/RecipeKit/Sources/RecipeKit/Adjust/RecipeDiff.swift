@@ -32,9 +32,10 @@ public struct PantryUpdate: Hashable, Sendable, Identifiable {
 /// several (`replaces`: ginger + garlic → ginger garlic paste) or when the swaps table pairs
 /// them (Shaoxing wine → dry sherry). Matched ingredients whose amount differs by at least
 /// `scaleThreshold` become a scale (same unit) or an amount change (different units). Everything
-/// else is a remove or an add, and the user's steps replace the old ones in one edit.
+/// else is a remove or an add, and the user's steps replace the old ones in one edit. Notes the
+/// recipe doesn't have yet become `addNote` edits.
 public struct RecipeDiff: Hashable, Sendable {
-    /// In display order: replaces, removes, amount changes, adds, then the steps.
+    /// In display order: replaces, removes, amount changes, adds, the steps, then new notes.
     public var edits: [RecipeEdit]
     public var pantryUpdates: [PantryUpdate]
     /// The user's title, when it differs from the current one (offered, off by default).
@@ -125,6 +126,14 @@ public struct RecipeDiff: Hashable, Sendable {
         var edits = replaces.map(\.edit) + removes + amountEdits.sorted(by: { order($0, in: original) < order($1, in: original) }) + adds
         if !mine.steps.isEmpty && mine.steps != original.steps {
             edits.append(.replaceSteps(mine.steps))
+        }
+        // Notes in the user's version that the recipe doesn't already have (tips from the paste).
+        let existingNotes = Set(original.notes.map { $0.collapsedWhitespace.lowercased() })
+        var seenNotes: Set<String> = []
+        for note in mine.notes {
+            let key = note.collapsedWhitespace.lowercased()
+            guard !key.isEmpty, !existingNotes.contains(key), seenNotes.insert(key).inserted else { continue }
+            edits.append(.addNote(note.collapsedWhitespace))
         }
 
         // Title and servings: offered separately.

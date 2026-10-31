@@ -36,6 +36,24 @@ struct PasteProseTests {
         #expect(analysis.dropped == ["The salt, harder browning, and longer simmer are the fixes for the low flavor."])
     }
 
+    @Test func diffCarriesTheTipAsANote() throws {
+        let original = try #require(RecipeImporter.parse(html: Fixture.html("woksoflife-shortcut-mongolian-ground-beef"), url: nil))
+        let mine = try #require(RecipeImporter.parse(text: Fixture.text("mongolian-beef-my-version-markdown")))
+        let plain = try #require(RecipeImporter.parse(text: Fixture.text("mongolian-beef-my-version")))
+        let diff = RecipeDiff.compare(current: original, mine: mine)
+        let summaries = diff.edits.map { $0.summary(in: original) }
+        // Same as the plain write-up, plus the note at the end.
+        #expect(summaries == RecipeDiff.compare(current: original, mine: plain).edits.map { $0.summary(in: original) }
+                + ["Note: For a clear tingle, use ½–1 tsp Sichuan peppercorn."])
+        #expect(summaries.contains("Use your steps (11 steps)"))
+        let applied = original.applying(diff.edits)
+        #expect(applied.notes.last == "For a clear tingle, use ½–1 tsp Sichuan peppercorn.")
+        #expect(!applied.steps.contains { $0.contains("fixes for the low flavor") })
+
+        // A note the recipe already has isn't offered again.
+        #expect(!RecipeDiff.compare(current: applied, mine: mine).edits.contains { if case .addNote = $0 { true } else { false } })
+    }
+
     @Test func trailingParagraphInAPlainWriteUp() throws {
         let text = """
         Garlic Noodles (serves 2)
