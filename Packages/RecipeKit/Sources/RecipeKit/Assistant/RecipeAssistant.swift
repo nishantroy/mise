@@ -24,6 +24,9 @@ public protocol RecipeAssistant: Sendable {
     /// swap that left a step awkward), validated by `StepRewrites`. Offered unticked. The rules
     /// have none.
     func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String) async throws -> [StepRewriteProposal]
+    /// "What can I cook?": the question as a structured query. A model's reading must go through
+    /// `CookQueryMerge.merge` with the rules' parse, so it can only add grounded terms.
+    func parseCookQuery(text: String) async throws -> CookQuery
 }
 
 extension RecipeAssistant {
@@ -50,5 +53,9 @@ extension RecipeAssistant {
 
     public func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String) async throws -> [StepRewriteProposal] {
         []
+    }
+
+    public func parseCookQuery(text: String) async throws -> CookQuery {
+        CookQueryParser().parse(text)
     }
 }
