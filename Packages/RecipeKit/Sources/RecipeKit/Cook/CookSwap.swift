@@ -14,15 +14,21 @@ public struct CookSwap: Codable, Hashable, Sendable, Identifiable {
     public var consequence: String?
     /// A model's tidier wording of a step, applied only while the step still reads `from`.
     public var reworded: [StepPatch]
+    /// The pantry entry marked "missing" when the swap was made, and what it said before
+    /// ("have", "missing", or nil for no entry), so undo can put it back.
+    public var pantryKey: String?
+    public var pantryBefore: String?
 
     public init(id: UUID = UUID(), original: Ingredient, suggestion: SwapSuggestion?, replacements: [Ingredient],
-                consequence: String? = nil, reworded: [StepPatch] = []) {
+                consequence: String? = nil, reworded: [StepPatch] = [], pantryKey: String? = nil, pantryBefore: String? = nil) {
         self.id = id
         self.original = original
         self.suggestion = suggestion
         self.replacements = replacements
         self.consequence = consequence
         self.reworded = reworded
+        self.pantryKey = pantryKey
+        self.pantryBefore = pantryBefore
     }
 
     /// A swap (or skip, when `suggestion` is nil or "Leave it out") of `original`, with
@@ -155,7 +161,7 @@ public enum CookSwapApplier {
     // MARK: Text
 
     /// New quantity ÷ old, when it isn't 1 and both are in the same unit.
-    static func amountRatio(_ original: Ingredient, _ replacements: [Ingredient]) -> Double? {
+    public static func amountRatio(_ original: Ingredient, _ replacements: [Ingredient]) -> Double? {
         guard replacements.count == 1, let new = replacements[0].quantity, let old = original.quantity, old > 0,
               replacements[0].unit == original.unit else { return nil }
         let ratio = new / old

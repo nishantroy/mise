@@ -49,6 +49,18 @@ extension ModelContext {
         }
     }
 
+    /// The status stored for `key`, if any.
+    func pantryStatus(key: String) -> PantryStatus? {
+        let descriptor = FetchDescriptor<PantryEntry>(predicate: #Predicate { $0.key == key })
+        return (try? fetch(descriptor).first)?.pantryStatus
+    }
+
+    /// Deletes the pantry entry for `key` (undoing a change that created it).
+    func removePantry(key: String) {
+        let descriptor = FetchDescriptor<PantryEntry>(predicate: #Predicate { $0.key == key })
+        for entry in (try? fetch(descriptor)) ?? [] { delete(entry) }
+    }
+
     func pantrySnapshot() -> PantrySnapshot {
         ((try? fetch(FetchDescriptor<PantryEntry>())) ?? []).snapshot
     }
