@@ -34,6 +34,10 @@ targets:
       - target: MiseShare
         embed: true
         codeSign: true
+      # Live Activity for AlarmKit countdowns (Lock Screen / Dynamic Island).
+      - target: MiseWidgets
+        embed: true
+        codeSign: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_BASE)
@@ -65,6 +69,23 @@ targets:
         INFOPLIST_FILE: ShareExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: ShareExtension/MiseShare.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
+
+  MiseWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+      # Shared with the app: the alarm metadata and the design tokens.
+      - path: App/Services/CookTimerAlarm.swift
+      - path: App/Theme/Theme.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_BASE).widgets
+        PRODUCT_NAME: MiseWidgets
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_FILE: Widgets/Info.plist
+        APPLICATION_EXTENSION_API_ONLY: YES
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
 
   MiseUITests:
     type: bundle.ui-testing

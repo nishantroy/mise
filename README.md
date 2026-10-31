@@ -4,7 +4,7 @@ A personal iPhone recipe app. Import a recipe from a link (or Share from Safari)
 
 - `PLAN.md`: the v1 spec. `DESIGN.md`: the visual design. `NOTES.md`: decisions, deviations and checks still to do by hand.
 - `Packages/RecipeKit`: all the logic (parsing, ingredient catalog, swaps, feedback rules), plain Swift + Foundation, tested with `swift test`.
-- `App/`: the SwiftUI app (SwiftData storage). `ShareExtension/`: the Safari share extension. `MiseUITests/`: XCUITests.
+- `App/`: the SwiftUI app (SwiftData storage). `ShareExtension/`: the Safari share extension. `Widgets/`: the Live Activity for cook-mode timers (AlarmKit countdowns). `MiseUITests/`: XCUITests.
 
 ## Requirements
 
@@ -56,7 +56,7 @@ The project ships with placeholders: `DEVELOPMENT_TEAM` empty, `BUNDLE_ID_BASE =
    BUNDLE_ID_BASE: com.yourname.mise
    APP_GROUP_ID: group.com.yourname.mise
    ```
-   The app gets `$(BUNDLE_ID_BASE)` and the share extension `$(BUNDLE_ID_BASE).share`. Both entitlements files and both Info.plists (`AppGroupID`) pick up `$(APP_GROUP_ID)`, so these three lines are the only place to change.
+   The app gets `$(BUNDLE_ID_BASE)`, the share extension `$(BUNDLE_ID_BASE).share` and the timer Live Activity extension `$(BUNDLE_ID_BASE).widgets` (no entitlements). Both entitlements files and both Info.plists (`AppGroupID`) pick up `$(APP_GROUP_ID)`, so these three lines are the only place to change.
 3. `xcodegen generate`.
 
 ## Run on your iPhone
@@ -82,4 +82,4 @@ The app icon is a placeholder (terracotta with a serif "M"). Replace `App/Assets
 
 ## Privacy
 
-No accounts, no backend, no analytics. Recipe pages are fetched directly from the site you link. The Foundation Models assistant runs on the device. Both targets ship a `PrivacyInfo.xcprivacy` declaring UserDefaults use (CA92.1 for the app's own defaults, 1C8F.1 for the App Group).
+No accounts, no backend, no analytics. Recipe pages are fetched directly from the site you link. The Foundation Models assistant runs on the device. Both targets ship a `PrivacyInfo.xcprivacy` declaring UserDefaults use (CA92.1 for the app's own defaults, 1C8F.1 for the App Group). The widget extension uses no required-reason APIs.
