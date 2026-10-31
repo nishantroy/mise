@@ -81,7 +81,7 @@ public final class IngredientCatalog: Sendable {
     public let swapRules: [String: [SwapOption]]
     private let byID: [String: CatalogEntry]
     /// (normalised alias, entry id), longest alias first.
-    private let aliases: [(alias: String, id: String)]
+    let aliases: [(alias: String, id: String)]
 
     public init(entries: [CatalogEntry], swaps: [SwapRule]) {
         self.entries = entries
