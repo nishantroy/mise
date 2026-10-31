@@ -15,7 +15,7 @@ public enum PrepGroupKind: String, CaseIterable, Codable, Hashable, Sendable {
 
 /// One line of the prep list. Ingredients are referenced by ID, so the text is rendered from
 /// whatever (scaled) recipe is shown.
-public struct PrepItem: Hashable, Sendable, Identifiable {
+public struct PrepItem: Codable, Hashable, Sendable, Identifiable {
     public var id: String
     /// "Thinly slice", "Mix the sauce:", "Marinate", "Preheat the oven to 200°C". Empty for "Get out".
     public var action: String
@@ -68,7 +68,7 @@ public struct PrepItem: Hashable, Sendable, Identifiable {
     }
 }
 
-public struct PrepGroup: Hashable, Sendable, Identifiable {
+public struct PrepGroup: Codable, Hashable, Sendable, Identifiable {
     public var kind: PrepGroupKind
     public var items: [PrepItem]
     public var id: PrepGroupKind { kind }
@@ -80,8 +80,8 @@ public struct PrepGroup: Hashable, Sendable, Identifiable {
 }
 
 /// The "Mise en place" list shown before the first step.
-public struct PrepPlan: Hashable, Sendable {
-    public enum Source: String, Hashable, Sendable { case rules, model }
+public struct PrepPlan: Codable, Hashable, Sendable {
+    public enum Source: String, Codable, Hashable, Sendable { case rules, model }
 
     /// Non-empty groups in a fixed order: start early, chop and prep, mix ahead, get out.
     public var groups: [PrepGroup]
