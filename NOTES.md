@@ -10,6 +10,15 @@ Decisions and deviations from `PLAN.md`, plus checks that need a real device.
 - **A `MiseUITests` target was added** to `project.yml` (the amendments ask for XCUITests); it is wired into the `Mise` scheme's test action.
 - Build output goes to `build/` (ignored), via `-derivedDataPath build/DerivedData`.
 
+- **Fixtures (M1).** Serious Eats returned HTTP 402 to curl, and NYT Cooking is paywalled, so the five fixtures are: The Woks of Life (`@graph`, Shaoxing wine), Indian Healthy Recipes (Indian blog, `@graph` + `HowToSection`), BBC Good Food (top-level object, `ImageObject`), RecipeTin Eats (`HowToSection`), and Wikibooks Kung Pao Chicken (no JSON-LD). Each was trimmed to `<title>`, `og:` meta tags and the JSON-LD blocks (Wikibooks: the article body), with a comment giving the source URL.
+- **Text fallback headings.** Besides "Instructions / Directions / Method / Steps" the fallback also accepts "Preparation", "Procedure" (Wikibooks) and "How to make". Sub-headings inside the ingredient list (`<h3>`, or pasted lines ending in ":") are skipped rather than parsed as ingredients. When the page has heading tags, steps stop at the next heading; for pasted text they stop at a "Notes / Tips / Nutrition…" line.
+- **Text fallback title** is `og:title` or `<title>` with a trailing " - Site name" removed. Wikibooks therefore gives "Cookbook:Kung Pao Chicken"; good enough, and the user can rename. Servings are detected from "Serves N / Servings N / Makes N" above the ingredients; time is not parsed in the fallback.
+- **Ingredient names keep their original case** ("Shaoxing wine"), not lowercased as in the plan's example; matching lowercases internally.
+- **Notes from the JSON-LD path:** none (`notes` stays empty); section names in `HowToSection` are dropped and their steps flattened.
+- **Cuisine** with several values is joined ("Asian, Indian").
+- **Quantity formatting:** cooking units use ⅛ ¼ ⅓ ½ ⅔ ¾ glyphs (values ≥ 10 round to whole numbers); g/kg/ml/l/oz/lb use decimals, rounding to the nearest 5 above 100.
+- Extra units beyond the plan's list: dash, slice, stalk, sprig, bunch, handful, inch, piece, packet, fl oz.
+
 ## Manual checks (owner, on a device)
 
 (filled in as milestones land)
