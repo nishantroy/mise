@@ -91,7 +91,20 @@ enum StepRewriter {
             out += atSentenceStart ? replacement.prefix(1).uppercased() + replacement.dropFirst() : replacement
         }
         out += ns.substring(from: cursor)
-        return out
+        return collapseRepeats(of: replacement, in: out)
+    }
+
+    /// "the ginger garlic paste and ginger garlic paste" → "the ginger garlic paste". Repeats of the
+    /// same name joined by "and", "&" or commas (each optionally with "the"/"a"/"some") become one.
+    /// Happens when several old names in one list are replaced by the same new one.
+    static func collapseRepeats(of name: String, in text: String) -> String {
+        let words = name.trimmed.split(whereSeparator: \.isWhitespace).map { Rx.escape(String($0)) }
+        guard !words.isEmpty else { return text }
+        let n = words.joined(separator: "\\s+")
+        let article = "(?:(?:the|a|an|some)\\s+)?"
+        let joiner = "(?:\\s*,\\s*(?:and\\s+|&\\s*)?|\\s*&\\s*|\\s+and\\s+)"
+        let pattern = "\\b(\(article)\(n))(?:\(joiner)\(article)\(n)\\b)+"
+        return Rx.replace(pattern, in: text, with: "$1")
     }
 
     /// Lowercased name plus a simple plural or singular form ("onion" / "onions").

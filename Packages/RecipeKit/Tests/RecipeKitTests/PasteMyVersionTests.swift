@@ -222,7 +222,7 @@ struct RecipeDiffTests {
         let applied = original.applying(replaces)
         #expect(applied.ingredients.map(\.name) == ["ginger garlic paste", "soy sauce"])
         #expect(applied.ingredients[0].quantity == 1.5)
-        #expect(applied.steps[0] == "Fry the ginger garlic paste and ginger garlic paste.")
+        #expect(applied.steps[0] == "Fry the ginger garlic paste.", "repeats of the new name are collapsed")
     }
 
     @Test func onlyOneOfASetBecomesASingleReplace() {
