@@ -169,6 +169,16 @@ struct RecipeMatcherTests {
         #expect(chowMein.why == "Uses chicken · ~30 min · missing Chinese cooking wine — dry sherry works")
     }
 
+    @Test func writtenAlternativeInThePantryIsNotMissing() throws {
+        // Kung Pao lists "sherry or rice wine" (catalog: Shaoxing wine, which the pantry lacks);
+        // the pantry has dry sherry, so it isn't missing.
+        let r = try search("kung pao")
+        let kungPao = try #require(r.matches.first)
+        #expect(kungPao.title == "Kung Pao Chicken")
+        #expect(!kungPao.missing.contains { $0.catalogID == "shaoxing-wine" })
+        #expect(kungPao.missing.map(\.name) == ["dried red chile peppers", "bamboo shoots", "Hoisin sauce"])
+    }
+
     @Test func withWhatIHaveDropsRecipesThatNeedShopping() throws {
         let r = try search("what can I make with what I have")
         #expect(r.status == .matched)

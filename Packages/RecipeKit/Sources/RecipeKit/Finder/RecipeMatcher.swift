@@ -293,7 +293,11 @@ public struct RecipeMatcher: Sendable {
             if entry?.commonness == .staple { continue }
             total += 1
             let wanted = query.ingredients.contains { Self.matches(query: $0, ingredient: ingredient, entry: entry, catalog: catalog, avoiding: false) }
-            let isMissing = !wanted && (pantry.missing.contains(key)
+            // "sherry or rice wine": having any written alternative is enough.
+            let alternativeInPantry = Self.alternatives(ingredient.name).contains { alt in
+                catalog.match(alt).map { pantry.have.contains($0.id) } ?? false
+            }
+            let isMissing = !wanted && !alternativeInPantry && (pantry.missing.contains(key)
                 || (entry.map { ($0.commonness == .specialty || $0.commonness == .rare) && !pantry.have.contains(key) } ?? false))
             if isMissing {
                 let swap = entry.flatMap { entry in
@@ -311,6 +315,13 @@ public struct RecipeMatcher: Sendable {
             }
         }
         return Coverage(missing: missing, covered: total - missing.count, total: total, hasEverything: missing.isEmpty && proteinsKnown)
+    }
+
+    /// "sherry or rice wine" → ["sherry", "rice wine"]; one name → [].
+    static func alternatives(_ name: String) -> [String] {
+        let parts = name.replacingOccurrences(of: " / ", with: " or ")
+            .components(separatedBy: " or ").map(\.trimmed).filter { !$0.isEmpty }
+        return parts.count > 1 ? parts : []
     }
 
     /// "sherry or rice wine" → "sherry"; "cornflour / cornstarch" → "cornflour";
