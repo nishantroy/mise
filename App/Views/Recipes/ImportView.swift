@@ -9,6 +9,7 @@ struct ImportView: View {
     var onSaved: (SavedRecipe) -> Void
 
     @Environment(\.recipeFetcher) private var fetcher
+    @Environment(AssistantProvider.self) private var provider
     @Environment(\.dismiss) private var dismiss
     @State private var mode: Mode = .link
     @State private var urlText = ""
@@ -126,6 +127,11 @@ struct ImportView: View {
         return url
     }
 
+    /// Cuisine guess and time estimate, computed once at import and stored on the recipe.
+    private func withInsights(_ recipe: Recipe) async -> Recipe {
+        await RecipeInsights.enrich(recipe, using: provider.assistant)
+    }
+
     private func runImport() {
         errorMessage = nil
         switch mode {
@@ -134,7 +140,11 @@ struct ImportView: View {
                 errorMessage = "Couldn't find a recipe in that text. Make sure it has an \"Ingredients\" heading and a \"Method\" or \"Instructions\" heading."
                 return
             }
-            parsed = recipe
+            isLoading = true
+            Task {
+                defer { isLoading = false }
+                parsed = await withInsights(recipe)
+            }
         case .link:
             guard let url = normalisedURL else {
                 errorMessage = "That doesn't look like a web link."
@@ -146,7 +156,7 @@ struct ImportView: View {
                 do {
                     let html = try await fetcher.fetchHTML(from: url)
                     if let recipe = RecipeImporter.parse(html: html, url: url) {
-                        parsed = recipe
+                        parsed = await withInsights(recipe)
                     } else {
                         errorMessage = "Couldn't find a recipe on that page. Try the Text tab and paste the recipe instead."
                     }
