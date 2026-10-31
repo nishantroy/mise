@@ -14,7 +14,12 @@ extension XCUIApplication {
         buttons["onboarding.next"].tap()
         buttons["onboarding.next"].tap()
         buttons["onboarding.next"].tap()
-        for id in pantryPicks { buttons["pantry.pick.\(id)"].tap() }
+        for id in pantryPicks {
+            let chip = buttons["pantry.pick.\(id)"]
+            XCTAssertTrue(chip.waitForExistence(timeout: 5))
+            chip.scrollIntoView(in: scrollViews.firstMatch)
+            chip.tap()
+        }
         buttons["onboarding.finish"].tap()
         XCTAssertTrue(tabBars.buttons["Recipes"].waitForExistence(timeout: 10))
     }

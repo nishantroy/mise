@@ -45,6 +45,8 @@ Decisions and deviations from `PLAN.md`, plus checks that need a real device.
 - **"Do you have X?" → Yes** writes `have` and collapses the card; **No** writes `missing` and reveals the swaps in place. The review list is computed once when the screen opens, so answering doesn't reshuffle the cards.
 - **Recipe detail landed in M5** (needed to verify the saved swap); M6 adds the adjust flow.
 
+- **Adjust flow (M6).** Selected quick chips (except "Perfect") and the free text are joined into one feedback string for the assistant. "Perfect" isn't parsed; it sets the rating to thumbs-up if no thumb was chosen. Feedback that was typed but never run through "Suggest changes" (or changed since) is saved as a note, so nothing is lost. Every save bumps `timesCooked` and records a revision ("Cooked it" or "Cooked it: …"), even with no edits. If the assistant throws, the view falls back to the rules.
+
 ## Manual checks (owner, on a device)
 
 (filled in as milestones land)
