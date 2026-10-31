@@ -1,39 +1,102 @@
 import Foundation
 
 /// Pasted recipes whose ingredients only appear inside the steps ("Slice ½ onion, 1 green bell
-/// pepper…"), with no "Ingredients" heading. The first line is the title (servings from
-/// "(serves 4)"); every other line is a step, kept verbatim, except short section labels
-/// ("Prep first", "Sauce", "Cook"), which are dropped. Ingredients come from
-/// `StepIngredientExtractor`.
+/// pepper…"), with no "Ingredients" heading, often markdown copied from a chat app. The first
+/// line is the title (servings from "(serves 4)"). Short section labels ("**Prep first**",
+/// "## Sauce", "Cook") are dropped. Prose that isn't an instruction is sorted by `PasteProse`:
+/// tips and variations become notes, commentary aimed at the reader is dropped. Every other
+/// line is a step, kept verbatim apart from markdown and list markers. Ingredients come from
+/// `StepIngredientExtractor` (steps only, so a tip's amounts never become ingredients).
 public enum StepStyleParser {
+    /// What the rules make of a pasted write-up, before ingredient extraction.
+    public struct Analysis: Hashable, Sendable {
+        public var title: String
+        public var servings: Int?
+        public var steps: [String]
+        /// Tips and variations ("For a clear tingle, use ½–1 tsp Sichuan peppercorn.").
+        public var notes: [String]
+        /// Commentary that was left out ("The salt … are the fixes for the low flavor.").
+        public var dropped: [String]
+    }
+
     /// Returns nil when there are no steps or fewer than two ingredient mentions (so arbitrary
     /// prose isn't taken for a recipe).
     public static func parse(text: String) -> Recipe? {
-        let lines = HTMLText.lines(fromText: text).map { cleanMarkdown($0.text) }.filter { !$0.isEmpty }
-        guard let first = lines.first else { return nil }
-        let (title, titleServings) = titleAndServings(first)
-        var servings = titleServings
-        let body = Array(lines.dropFirst())
+        guard let analysis = analyse(text: text), !analysis.steps.isEmpty else { return nil }
+        let ingredients = StepIngredientExtractor.extract(from: analysis.steps)
+        guard ingredients.count >= 2 else { return nil }
+        return Recipe(title: analysis.title.isEmpty ? "Untitled recipe" : analysis.title, servings: analysis.servings,
+                      ingredients: ingredients, steps: analysis.steps, notes: analysis.notes)
+    }
 
-        var steps: [String] = []
+    struct Line {
+        var text: String
+        /// "- ", "* ", "• ", "1." or "1)" at the start.
+        var isListItem: Bool
+        /// "# Heading", "**Whole line bold**", "__Whole line__".
+        var isMarkdownHeading: Bool
+    }
+
+    static func lines(of text: String) -> [Line] {
+        text.components(separatedBy: .newlines).map(\.collapsedWhitespace).filter { !$0.isEmpty }.compactMap { raw in
+            let heading = Rx.test("^#{1,6}\\s", raw) || Rx.test("^(\\*\\*|__)[^*_]+\\1\\s*:?$", raw)
+            let listItem = Rx.test("^(?:[-*•–·▢□☐]\\s+|\\d{1,2}[.)]\\s+)", raw)
+            let cleaned = JSONLDRecipeParser.stripStepNumber(TextRecipeParser.stripBullet(cleanMarkdown(raw)))
+            return cleaned.isEmpty ? nil : Line(text: cleaned, isListItem: listItem, isMarkdownHeading: heading)
+        }
+    }
+
+    public static func analyse(text: String) -> Analysis? {
+        let all = lines(of: text)
+        guard let first = all.first else { return nil }
+        let (title, titleServings) = titleAndServings(first.text)
+        var servings = titleServings
+        let body = Array(all.dropFirst())
+        // In a list-style write-up, unbulleted prose after the last list item is commentary or a
+        // tip unless it reads like an instruction ("Serve hot").
+        let listItems = body.indices.filter { body[$0].isListItem }
+        let lastListItem = listItems.count >= 2 ? listItems.last : nil
+
+        var steps: [String] = [], notes: [String] = [], dropped: [String] = []
+        var inNotesSection = false
         for (i, line) in body.enumerated() {
-            let cleaned = JSONLDRecipeParser.stripStepNumber(TextRecipeParser.stripBullet(line))
-            guard !cleaned.isEmpty else { continue }
+            let cleaned = line.text
             // A "Serves 4" line on its own.
             if servings == nil, cleaned.count <= 30,
                let m = Rx.firstMatch("^(?:serves|servings|makes|yield)\\s*:?\\s*(\\d+)\\b[^.]*$", in: cleaned) {
                 servings = Int(m[1]!)
                 continue
             }
-            let next = body.dropFirst(i + 1).first.map { JSONLDRecipeParser.stripStepNumber(TextRecipeParser.stripBullet($0)) }
-            if isSectionLabel(cleaned, next: next) { continue }
-            steps.append(cleaned)
+            let next = body.dropFirst(i + 1).first?.text
+            if isHeading(line) || isSectionLabel(cleaned, next: next) {
+                inNotesSection = PasteProse.isNotesHeading(cleaned)
+                continue
+            }
+            let isStep: Bool
+            if inNotesSection || PasteProse.hasNotePrefix(cleaned) {
+                isStep = false
+            } else if line.isListItem {
+                isStep = true
+            } else if let lastListItem, i > lastListItem, !PasteProse.startsLikeInstruction(cleaned) {
+                isStep = false
+            } else {
+                isStep = !PasteProse.isAllProse(cleaned)
+            }
+            if isStep {
+                steps.append(cleaned)
+            } else {
+                let sorted = PasteProse.sort(cleaned)
+                notes += sorted.notes
+                dropped += sorted.dropped
+            }
         }
-        guard !steps.isEmpty else { return nil }
-        let ingredients = StepIngredientExtractor.extract(from: steps)
-        guard ingredients.count >= 2 else { return nil }
-        return Recipe(title: title.isEmpty ? "Untitled recipe" : title, servings: servings,
-                      ingredients: ingredients, steps: steps)
+        return Analysis(title: title, servings: servings, steps: steps, notes: notes, dropped: dropped)
+    }
+
+    /// A short markdown heading ("**Prep first**", "## Cook"), not a sentence.
+    static func isHeading(_ line: Line) -> Bool {
+        line.isMarkdownHeading && line.text.count <= 40 && line.text.split(separator: " ").count <= 6
+            && !Rx.test("[.!?]$", line.text)
     }
 
     /// "Mongolian Ground Beef (serves 4)" → ("Mongolian Ground Beef", 4). Also "– serves 4",
