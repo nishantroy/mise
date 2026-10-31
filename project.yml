@@ -66,6 +66,10 @@ targets:
     platform: iOS
     sources:
       - path: MiseUITests
+      # Recipe fixtures, served to the app through StubRecipeFetcher.
+      - path: Packages/RecipeKit/Tests/RecipeKitTests/Fixtures
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: Mise
     settings:

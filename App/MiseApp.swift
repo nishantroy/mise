@@ -6,11 +6,13 @@ import RecipeKit
 struct MiseApp: App {
     @State private var container = Persistence.makeContainer()
     @State private var assistantProvider = AssistantProvider()
+    @State private var router = AppRouter()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(assistantProvider)
+                .environment(router)
                 .environment(\.recipeFetcher, Self.fetcher)
                 .miseTheme()
         }
@@ -37,11 +39,22 @@ struct RootView: View {
 }
 
 struct MainTabView: View {
+    @Environment(AppRouter.self) private var router
+
     var body: some View {
-        TabView {
-            Tab("Recipes", systemImage: "book") { RecipeListView() }
-            Tab("Pantry", systemImage: "cabinet") { PantryView() }
-            Tab("Settings", systemImage: "gearshape") { SettingsView() }
+        @Bindable var router = router
+        TabView(selection: $router.tab) {
+            Tab("Recipes", systemImage: "book", value: AppTab.recipes) { RecipeListView() }
+            Tab("Pantry", systemImage: "cabinet", value: AppTab.pantry) { PantryView() }
+            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView() }
+        }
+        .sheet(item: $router.activeImport, onDismiss: { router.importSheetDismissed() }) { request in
+            NavigationStack {
+                ImportView(initialURL: request.url) { saved in
+                    router.activeImport = nil
+                    router.open(recipeID: saved.id)
+                }
+            }
         }
     }
 }

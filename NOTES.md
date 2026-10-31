@@ -38,6 +38,13 @@ Decisions and deviations from `PLAN.md`, plus checks that need a real device.
 - **Onboarding keeps the plan's 4 pages** (diet + avoid; dislikes + heat; cuisines + time + household; pantry), so a page can hold two or three short questions rather than strictly one.
 - **Pantry "cards"** are inset-grouped List sections with `surface` rows on the cream background, which keeps native swipe actions; Have/Missing headers are serif.
 
+- **Clipboard (M5).** The link field is not prefilled from the clipboard on appear (amendment 2): reading `UIPasteboard.general.url` triggers the paste prompt. A `PasteButton` fills the field in one tap instead. Share-extension URLs (M8) do prefill it.
+- **Stubbed network in UI tests.** `-uiTesting` uses a separate store file (`MiseUITest.store`), `-resetData` deletes it first, and `MISE_STUB_PAGES` (JSON of URL → HTML, built by the UI test from the RecipeKit fixtures that are copied into the UI-test bundle) swaps in `StubRecipeFetcher`. `RecipeFetching` and the fetcher are injected through the SwiftUI environment.
+- **Revision 1 on import** is always recorded: "Imported" or "Imported: Swapped Shaoxing wine for dry sherry; …". `originalData` is the recipe as parsed, before swaps, so "Reset to original" also undoes import-time swaps.
+- **Spicy-only cards** default to "Use half" switched on; other cards offer it as an off-by-default toggle when the user likes mild food. A chosen swap wins over halving.
+- **"Do you have X?" → Yes** writes `have` and collapses the card; **No** writes `missing` and reveals the swaps in place. The review list is computed once when the screen opens, so answering doesn't reshuffle the cards.
+- **Recipe detail landed in M5** (needed to verify the saved swap); M6 adds the adjust flow.
+
 ## Manual checks (owner, on a device)
 
 (filled in as milestones land)
