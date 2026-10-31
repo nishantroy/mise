@@ -12,6 +12,9 @@ struct RecipeDetailView: View {
     @State private var servings: Int?
     @State private var showingCheck = false
     @State private var showingAdjust = false
+    @State private var showingCook = false
+    /// Cook mode ended with "Done", so "I made this" opens once it has closed.
+    @State private var cookFinished = false
     @State private var showingMyVersion = false
     @State private var confirmReset = false
     @State private var confirmDelete = false
@@ -43,12 +46,26 @@ struct RecipeDetailView: View {
         }
         .miseScreenBackground()
         .safeAreaInset(edge: .bottom) {
-            Button("I made this") { showingAdjust = true }
-                .buttonStyle(.misePrimary)
-                .padding(.horizontal, Theme.Spacing.gutter)
-                .padding(.vertical, Theme.Spacing.s)
-                .background(Color.mise.background)
-                .accessibilityIdentifier("detail.madeThis")
+            // Side by side; stacked when large text doesn't fit.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Theme.Spacing.s) { bottomActions }
+                VStack(spacing: Theme.Spacing.xs) { bottomActions }
+            }
+            .padding(.horizontal, Theme.Spacing.gutter)
+            .padding(.vertical, Theme.Spacing.s)
+            .background(Color.mise.background)
+        }
+        .fullScreenCover(isPresented: $showingCook, onDismiss: {
+            // "Done" in cook mode leads into "I made this".
+            if cookFinished {
+                cookFinished = false
+                showingAdjust = true
+            }
+        }) {
+            CookModeView(recipe: displayed, onFinish: {
+                cookFinished = true
+                showingCook = false
+            }, onClose: { showingCook = false })
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -109,6 +126,22 @@ struct RecipeDetailView: View {
     }
 
     // MARK: Sections
+
+    /// "Start cooking" (cook mode, at the servings chosen above) and "I made this".
+    @ViewBuilder
+    private var bottomActions: some View {
+        Button { showingCook = true } label: {
+            Label("Start cooking", systemImage: "frying.pan").fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.misePrimary)
+        .disabled(recipe.steps.isEmpty)
+        .accessibilityIdentifier("detail.startCooking")
+        Button { showingAdjust = true } label: {
+            Text("I made this").fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.miseSecondaryTall)
+        .accessibilityIdentifier("detail.madeThis")
+    }
 
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {

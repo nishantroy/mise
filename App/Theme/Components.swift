@@ -58,13 +58,15 @@ struct PrimaryButtonStyle: ButtonStyle {
 /// Accent label on a sunken capsule.
 struct SecondaryButtonStyle: ButtonStyle {
     var fullWidth = false
+    /// As tall as a primary button, for sitting beside one.
+    var tall = false
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(Theme.Fonts.button)
             .foregroundStyle(Color.mise.accent.opacity(isEnabled ? 1 : 0.5))
-            .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: Theme.Size.minTap)
+            .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: tall ? Theme.Size.primaryButtonHeight : Theme.Size.minTap)
             .padding(.horizontal, Theme.Spacing.m)
             .background(Color.mise.surfaceSunken, in: Capsule())
             .opacity(configuration.isPressed ? 0.8 : 1)
@@ -79,6 +81,7 @@ extension ButtonStyle where Self == PrimaryButtonStyle {
 extension ButtonStyle where Self == SecondaryButtonStyle {
     static var miseSecondary: SecondaryButtonStyle { SecondaryButtonStyle() }
     static var miseSecondaryWide: SecondaryButtonStyle { SecondaryButtonStyle(fullWidth: true) }
+    static var miseSecondaryTall: SecondaryButtonStyle { SecondaryButtonStyle(fullWidth: true, tall: true) }
 }
 
 /// Convenience wrappers named in the design spec.
