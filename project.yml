@@ -75,8 +75,9 @@ targets:
     platform: iOS
     sources:
       - path: Widgets
-      # Shared with the app: the alarm metadata and the design tokens.
+      # Shared with the app: the alarm metadata, the Stop intent and the design tokens.
       - path: App/Services/CookTimerAlarm.swift
+      - path: App/Services/CookTimerIntents.swift
       - path: App/Theme/Theme.swift
     settings:
       base:

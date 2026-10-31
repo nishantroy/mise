@@ -1,5 +1,6 @@
 import ActivityKit
 import AlarmKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -11,7 +12,8 @@ struct MiseWidgets: WidgetBundle {
 }
 
 /// The Lock Screen and Dynamic Island face of a cook-mode AlarmKit countdown. AlarmKit starts and
-/// ends the Live Activity itself; this only draws it. Stop/cancel controls come from the system.
+/// ends the Live Activity itself; this draws it, with a Stop button (`StopCookTimerIntent`) on the
+/// Lock Screen and in the expanded Dynamic Island. The compact views are countdown-only.
 struct CookTimerLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AlarmAttributes<CookTimerMetadata>.self) { context in
@@ -35,8 +37,12 @@ struct CookTimerLiveActivity: Widget {
                         .frame(maxWidth: 110, alignment: .trailing)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    if let subtitle = context.attributes.metadata?.subtitle {
-                        Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    HStack(spacing: 12) {
+                        if let subtitle = context.attributes.metadata?.subtitle {
+                            Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        StopTimerButton(state: context.state)
                     }
                 }
             } compactLeading: {
@@ -83,12 +89,37 @@ private struct LockScreenTimerView: View {
                 }
             }
             Spacer(minLength: 0)
-            TimerCountdown(state: state)
-                .font(.title.weight(.semibold))
-                .foregroundStyle(Color.mise.accent)
-                .frame(maxWidth: 130, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: Theme.Spacing.xs) {
+                TimerCountdown(state: state)
+                    .font(.title.weight(.semibold))
+                    .foregroundStyle(Color.mise.accent)
+                    .lineLimit(1)
+                    .frame(maxWidth: 130, alignment: .trailing)
+                StopTimerButton(state: state)
+            }
         }
         .padding(Theme.Spacing.m)
+    }
+}
+
+/// Cancels the countdown (or silences it if it's ringing) without opening Mise.
+private struct StopTimerButton: View {
+    let state: AlarmPresentationState
+
+    var body: some View {
+        if case .alert = state.mode {
+            EmptyView()
+        } else {
+            Button(intent: StopCookTimerIntent(alarmID: state.alarmID)) {
+                Label("Stop", systemImage: "stop.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .tint(CookTimerColors.accent)
+            .accessibilityLabel("Stop timer")
+        }
     }
 }
 
