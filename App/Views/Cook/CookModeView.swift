@@ -20,6 +20,9 @@ struct CookModeView: View {
     @State private var confirmExit = false
     @State private var exitFinishes = false
     @State private var previousIdleSetting = false
+    /// The chip whose "Custom time…" prompt is open.
+    @State private var customTimer: CookTimerSpec?
+    @State private var customText = ""
     private let links: StepIngredientLinker.Links
     private let stepTimers: [[CookTimerSpec]]
 
@@ -61,6 +64,21 @@ struct CookModeView: View {
         } message: {
             Text("Running timers will be cancelled.")
         }
+        .alert("Custom timer", isPresented: Binding(get: { customTimer != nil }, set: { if !$0 { customTimer = nil } })) {
+            TextField("Minutes", text: $customText)
+                .keyboardType(.numbersAndPunctuation)
+                .accessibilityIdentifier("cook.customTime")
+            Button("Start") {
+                if let spec = customTimer, let seconds = CookTimerAdjust.customSeconds(customText) {
+                    timers.start(spec, seconds: seconds)
+                }
+                customTimer = nil
+            }
+            .disabled(CookTimerAdjust.customSeconds(customText) == nil)
+            Button("Cancel", role: .cancel) { customTimer = nil }
+        } message: {
+            Text("Minutes, like 6 or 2.5, or minutes and seconds, like 1:30.")
+        }
         .onAppear {
             previousIdleSetting = UIApplication.shared.isIdleTimerDisabled
             UIApplication.shared.isIdleTimerDisabled = true
@@ -73,6 +91,7 @@ struct CookModeView: View {
             if phase == .active { timers.checkExpired() }
         }
         .task { await refinePlan() }
+        .task { await timers.observeAlarms() }
     }
 
     // MARK: Chrome
@@ -258,31 +277,85 @@ struct CookModeView: View {
         .accessibilityIdentifier("cook.ingredient")
     }
 
+    /// Tap starts the timer (a range's high end); touch and hold offers the low end and a custom
+    /// time. While running: tap stops it, and −1 min / +1 min sit either side.
+    @ViewBuilder
     private func timerChip(_ spec: CookTimerSpec) -> some View {
-        let running = timers.running(for: spec)
-        return Button {
-            if let running { timers.cancel(running.id) } else { timers.start(spec) }
-        } label: {
+        if let running = timers.running(for: spec) {
             HStack(spacing: Theme.Spacing.xxs) {
-                Image(systemName: running == nil ? "timer" : "stop.fill").font(Theme.Fonts.meta)
-                if let running {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(CookTimers.clock(running.remaining(at: context.date))).monospacedDigit()
+                adjustButton("−1 min", label: "Take a minute off \(spec.label) timer", id: "cook.timer.\(spec.position).minus") {
+                    timers.adjust(running.id, by: -60)
+                }
+                .disabled(!CookTimerAdjust.canShorten(remaining: running.remaining(at: .now)))
+                Button { timers.cancel(running.id) } label: {
+                    chipLabel(icon: "stop.fill", running: true) {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(CookTimers.clock(running.remaining(at: context.date))).monospacedDigit()
+                        }
                     }
-                } else {
-                    Text(spec.label)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop \(spec.label) timer")
+                .accessibilityIdentifier("cook.timer.\(spec.position)")
+                adjustButton("+1 min", label: "Add a minute to \(spec.label) timer", id: "cook.timer.\(spec.position).plus") {
+                    timers.adjust(running.id, by: 60)
                 }
             }
-            .font(.headline)
-            .padding(.horizontal, Theme.Spacing.m)
-            .frame(minHeight: Theme.Size.minTap)
-            .foregroundStyle(running == nil ? Color.mise.accent : Color.mise.onAccent)
-            .background(running == nil ? Color.mise.surfaceSunken : Color.mise.accent, in: Capsule())
-            .contentShape(Capsule())
+        } else {
+            Menu {
+                if spec.choices.count > 1, let low = spec.choices.first, let high = spec.choices.last {
+                    Button { timers.start(spec, seconds: low) } label: { Text("\(CookTimers.format(seconds: low)) (low end)") }
+                    Button { timers.start(spec, seconds: high) } label: { Text("\(CookTimers.format(seconds: high)) (high end)") }
+                }
+                Button {
+                    customText = ""
+                    customTimer = spec
+                } label: { Label("Custom time…", systemImage: "slider.horizontal.3") }
+            } label: {
+                chipLabel(icon: "timer", running: false) {
+                    Text(spec.label)
+                    if spec.choices.count > 1 {
+                        Image(systemName: "chevron.up.chevron.down").font(Theme.Fonts.caption).accessibilityHidden(true)
+                    }
+                }
+            } primaryAction: {
+                timers.start(spec)
+            }
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Start \(spec.label) timer")
+            .accessibilityHint(spec.choices.count > 1 ? "Touch and hold to pick the low end or a custom time" : "Touch and hold for a custom time")
+            .accessibilityIdentifier("cook.timer.\(spec.position)")
+        }
+    }
+
+    private func chipLabel<Content: View>(icon: String, running: Bool, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: Theme.Spacing.xxs) {
+            Image(systemName: icon).font(Theme.Fonts.meta)
+            content()
+        }
+        .font(.headline)
+        .padding(.horizontal, Theme.Spacing.m)
+        .frame(minHeight: Theme.Size.minTap)
+        .foregroundStyle(running ? Color.mise.onAccent : Color.mise.accent)
+        .background(running ? Color.mise.accent : Color.mise.surfaceSunken, in: Capsule())
+        .contentShape(Capsule())
+    }
+
+    private func adjustButton(_ title: String, label: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.Fonts.meta.weight(.semibold))
+                .monospacedDigit()
+                .padding(.horizontal, Theme.Spacing.s)
+                .frame(minHeight: Theme.Size.minTap)
+                .foregroundStyle(Color.mise.accent)
+                .background(Color.mise.surfaceSunken, in: Capsule())
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(running == nil ? "Start \(spec.label) timer" : "Stop \(spec.label) timer")
-        .accessibilityIdentifier("cook.timer.\(spec.position)")
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(id)
     }
 
     // MARK: Timers
@@ -332,7 +405,8 @@ struct CookModeView: View {
     @ViewBuilder
     private var banner: some View {
         if let done = timers.banner {
-            Button { timers.banner = nil } label: {
+            let sounding = timers.bannerIsSounding
+            Button { withAnimation { timers.dismissBanner() } } label: {
                 HStack(spacing: Theme.Spacing.s) {
                     Image(systemName: "bell.fill").foregroundStyle(Color.mise.accent)
                     VStack(alignment: .leading, spacing: 2) {
@@ -340,7 +414,11 @@ struct CookModeView: View {
                         Text(done.title).font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
                     }
                     Spacer(minLength: 0)
-                    Image(systemName: "xmark").foregroundStyle(Color.mise.inkSecondary).accessibilityHidden(true)
+                    if sounding {
+                        Text("Stop").font(Theme.Fonts.button).foregroundStyle(Color.mise.accent).accessibilityHidden(true)
+                    } else {
+                        Image(systemName: "xmark").foregroundStyle(Color.mise.inkSecondary).accessibilityHidden(true)
+                    }
                 }
                 .padding(Theme.Spacing.m)
                 .background(Color.mise.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
@@ -350,11 +428,14 @@ struct CookModeView: View {
             .buttonStyle(.plain)
             .padding(.horizontal, Theme.Spacing.gutter)
             .transition(.move(edge: .top).combined(with: .opacity))
-            .accessibilityLabel("Timer done: \(done.title). Dismiss.")
+            .accessibilityLabel(sounding ? "Timer done: \(done.title). Stop." : "Timer done: \(done.title). Dismiss.")
             .accessibilityIdentifier("cook.banner")
-            .task(id: done.id) {
+            .task(id: "\(done.id)-\(sounding)") {
+                // Stays up while the alarm or tone is sounding, so there's always a way to stop it.
+                guard !sounding else { return }
                 try? await Task.sleep(for: .seconds(10))
-                if timers.banner?.id == done.id { withAnimation { timers.banner = nil } }
+                guard !Task.isCancelled else { return }
+                if timers.banner?.id == done.id, !timers.bannerIsSounding { withAnimation { timers.dismissBanner() } }
             }
         }
     }
