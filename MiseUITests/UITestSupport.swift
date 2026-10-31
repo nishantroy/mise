@@ -11,9 +11,13 @@ extension XCUIApplication {
     /// Runs through onboarding with defaults (plus whatever `configure` does on step 1).
     func completeOnboarding(pantryPicks: [String] = []) {
         XCTAssertTrue(buttons["onboarding.next"].waitForExistence(timeout: 15))
-        buttons["onboarding.next"].tap()
-        buttons["onboarding.next"].tap()
-        buttons["onboarding.next"].tap()
+        // Tap Continue until the last page; taps during the page animation can be dropped.
+        var taps = 0
+        while !buttons["onboarding.finish"].waitForExistence(timeout: 1) && taps < 8 {
+            if buttons["onboarding.next"].isHittable { buttons["onboarding.next"].tap() }
+            taps += 1
+        }
+        XCTAssertTrue(buttons["onboarding.finish"].exists)
         for id in pantryPicks {
             let chip = buttons["pantry.pick.\(id)"]
             XCTAssertTrue(chip.waitForExistence(timeout: 5))

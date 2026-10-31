@@ -8,6 +8,11 @@ struct MiseApp: App {
     @State private var assistantProvider = AssistantProvider()
     @State private var router = AppRouter()
 
+    init() {
+        // UI tests: simulate the share extension having queued a URL.
+        if let url = LaunchOptions.enqueueImport { PendingImports.append(url) }
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -51,7 +56,10 @@ struct MainTabView: View {
             Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView() }
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
-            if phase == .active { provider.refresh() }
+            guard phase == .active else { return }
+            provider.refresh()
+            // Pick up links shared from Safari while the app was in the background.
+            router.enqueue(PendingImports.drain())
         }
         .sheet(item: $router.activeImport, onDismiss: { router.importSheetDismissed() }) { request in
             NavigationStack {

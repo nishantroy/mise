@@ -53,6 +53,8 @@ targets:
     platform: iOS
     sources:
       - path: ShareExtension
+      # Shared with the app: the App Group queue.
+      - path: App/Services/PendingImports.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_BASE).share
