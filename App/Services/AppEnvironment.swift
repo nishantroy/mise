@@ -26,6 +26,12 @@ enum LaunchOptions {
         guard let i = arguments.firstIndex(of: "-enqueueImport"), i + 1 < arguments.count else { return nil }
         return URL(string: arguments[i + 1])
     }
+
+    /// `-enqueueText <text>`: append shared text to the queue at launch, as the extension would.
+    static var enqueueText: String? {
+        guard let i = arguments.firstIndex(of: "-enqueueText"), i + 1 < arguments.count else { return nil }
+        return arguments[i + 1]
+    }
 }
 
 enum Persistence {

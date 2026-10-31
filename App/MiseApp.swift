@@ -12,6 +12,7 @@ struct MiseApp: App {
         if LaunchOptions.resetData { PendingImports.clear() }
         // UI tests: simulate the share extension having queued a URL.
         if let url = LaunchOptions.enqueueImport { PendingImports.append(url) }
+        if let text = LaunchOptions.enqueueText { PendingImports.appendText(text) }
     }
 
     var body: some Scene {
@@ -59,16 +60,23 @@ struct MainTabView: View {
         .onChange(of: scenePhase, initial: true) { _, phase in
             guard phase == .active else { return }
             provider.refresh()
-            // Pick up links shared from Safari. Each stays in the App Group queue until its
-            // sheet closes, so a link isn't lost if the app is killed mid-import.
+            // Pick up links and text shared from other apps. Each stays in the App Group queue
+            // until its sheet closes, so nothing is lost if the app is killed mid-import.
             router.onSharedImportFinished = { PendingImports.remove($0) }
             router.enqueue(PendingImports.pending())
         }
         .sheet(item: $router.activeImport, onDismiss: { router.importSheetDismissed() }) { request in
             NavigationStack {
-                ImportView(initialURL: request.url) { saved in
-                    router.activeImport = nil
-                    router.open(recipeID: saved.id)
+                if let text = request.sharedText {
+                    SharedTextView(text: text) { saved in
+                        router.activeImport = nil
+                        if let saved { router.open(recipeID: saved.id) }
+                    }
+                } else {
+                    ImportView(initialURL: request.url) { saved in
+                        router.activeImport = nil
+                        router.open(recipeID: saved.id)
+                    }
                 }
             }
         }

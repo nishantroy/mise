@@ -1,7 +1,8 @@
 import UIKit
 import UniformTypeIdentifiers
 
-/// Takes the first shared URL, queues it for the app, says so, and closes.
+/// Takes a shared web link or recipe text (e.g. from the claude.ai app), queues it for the app,
+/// says so, and closes.
 final class ShareViewController: UIViewController {
     private let card = UIView()
     private let icon = UIImageView()
@@ -57,11 +58,15 @@ final class ShareViewController: UIViewController {
         started = true
         let providers = (extensionContext?.inputItems as? [NSExtensionItem] ?? []).flatMap { $0.attachments ?? [] }
         Task { @MainActor in
-            if let url = await Self.firstURL(in: providers) {
+            switch await Self.sharedItem(in: providers) {
+            case .url(let url)?:
                 PendingImports.append(url)
                 finish(message: "Saved. Open Mise to finish importing.")
-            } else {
-                finish(message: "There's no link to save here.")
+            case .text(_, let text)?:
+                PendingImports.appendText(text)
+                finish(message: "Saved. Open Mise to add it as a recipe or as your version of one.")
+            case nil:
+                finish(message: "There's nothing to save here.")
             }
         }
     }
@@ -77,20 +82,36 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    /// First `public.url` attachment, falling back to a URL inside shared plain text.
-    private static func firstURL(in providers: [NSItemProvider]) async -> URL? {
-        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
-            if let url = await loadURL(provider), url.scheme?.hasPrefix("http") == true { return url }
-        }
-        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
-            if let text = await loadText(provider),
-               let match = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-                .firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-               let url = match.url {
-                return url
+    /// Recipe-like text (several lines, or long) wins, so a write-up shared together with a chat
+    /// link is kept as text. Otherwise the first `public.url` attachment, then a link inside
+    /// short shared text, then any other non-empty text.
+    private static func sharedItem(in providers: [NSItemProvider]) async -> PendingItem? {
+        var texts: [String] = []
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier)
+            && !provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+            if let text = await loadText(provider)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                texts.append(text)
             }
         }
-        return nil
+        if let recipe = texts.first(where: isRecipeLike) { return .text(id: UUID().uuidString, text: recipe) }
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+            if let url = await loadURL(provider), url.scheme?.hasPrefix("http") == true { return .url(url) }
+        }
+        for text in texts {
+            if let match = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+                .firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+               let url = match.url, url.scheme?.hasPrefix("http") == true {
+                return .url(url)
+            }
+        }
+        return texts.first.map { .text(id: UUID().uuidString, text: $0) }
+    }
+
+    /// At least three non-empty lines, or 120+ characters that aren't just a link.
+    static func isRecipeLike(_ text: String) -> Bool {
+        let lines = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        if lines.count >= 3 { return true }
+        return text.count >= 120 && URL(string: text)?.scheme == nil
     }
 
     private static func loadURL(_ provider: NSItemProvider) async -> URL? {
