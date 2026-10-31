@@ -9,7 +9,10 @@ struct MiseApp: App {
     @State private var router = AppRouter()
 
     init() {
-        if LaunchOptions.resetData { PendingImports.clear() }
+        if LaunchOptions.resetData {
+            PendingImports.clear()
+            CookSessionStore.clearAll()
+        }
         // UI tests: simulate the share extension having queued a URL.
         if let url = LaunchOptions.enqueueImport { PendingImports.append(url) }
         if let text = LaunchOptions.enqueueText { PendingImports.appendText(text) }

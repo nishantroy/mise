@@ -19,7 +19,7 @@ import UserNotifications
 @Observable
 final class CookTimerStore {
     struct RunningTimer: Identifiable, Equatable {
-        let id = UUID()
+        var id = UUID()
         /// `CookTimerSpec.id`: which chip started it.
         let specID: String
         let step: Int
@@ -117,6 +117,46 @@ final class CookTimerStore {
             stopAlarm(alarmID)
             timers[index].alarmID = nil
         }
+    }
+
+    // MARK: Sessions
+
+    /// The timers as stored in a cook session.
+    var sessionTimers: [CookSessionTimer] {
+        timers.map { CookSessionTimer(id: $0.id, specID: $0.specID, step: $0.step, name: $0.name, endDate: $0.endDate,
+                                      finished: $0.finished, alarmID: $0.alarmID) }
+    }
+
+    /// Puts back a resumed session's timers (already reconciled with AlarmKit's alarms). Their
+    /// alarms or notifications are still scheduled, so nothing is scheduled again; running ones
+    /// get their in-app wait back, and one that's ringing shows the banner with "Stop".
+    func restore(_ stored: [CookSessionTimer], now: Date = .now) {
+        for old in timers { waits[old.id]?.cancel() }
+        waits = [:]
+        timers = stored.map { RunningTimer(id: $0.id, specID: $0.specID, step: $0.step, name: $0.name, endDate: $0.endDate,
+                                           finished: $0.finished, alarmID: $0.alarmID) }
+        for timer in timers {
+            if let alarmID = timer.alarmID { seenAlarms.insert(alarmID) }
+            if timer.finished {
+                if timer.alarmID != nil { banner = timer }
+            } else {
+                waits[timer.id] = Task { [weak self] in
+                    let delay = timer.endDate.timeIntervalSince(now)
+                    if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+                    guard !Task.isCancelled else { return }
+                    self?.finish(timer.id)
+                }
+            }
+        }
+    }
+
+    /// Leaving cook mode without stopping anything: alarms and notifications keep going (the
+    /// session remembers them); only the in-app waits and the fallback tone stop.
+    func suspend() {
+        for (_, wait) in waits { wait.cancel() }
+        waits = [:]
+        stopTone()
+        banner = nil
     }
 
     /// Finishes timers whose end time has passed (e.g. while the app was in the background).
@@ -302,7 +342,7 @@ final class CookTimerStore {
 
     // MARK: Notifications (fallback)
 
-    private static func notificationID(_ id: UUID) -> String { "mise.timer.\(id.uuidString)" }
+    static func notificationID(_ id: UUID) -> String { "mise.timer.\(id.uuidString)" }
 
     private func scheduleNotification(for timer: RunningTimer) async {
         let center = UNUserNotificationCenter.current()

@@ -6,6 +6,11 @@ import RecipeKit
 /// the user can untick before saving.
 struct AdjustRecipeView: View {
     let saved: SavedRecipe
+    /// Swaps made in cook mode ("I'm out of X"), offered unticked so the recipe only changes
+    /// if the cook chooses.
+    var sessionSwaps: [CookSwap] = []
+    /// Called after saving.
+    var onSaved: () -> Void = {}
 
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
@@ -22,6 +27,15 @@ struct AdjustRecipeView: View {
     /// Waiting for the model's step rewrites (shown below the edits).
     @State private var isRewording = false
     @State private var assistantName = ""
+    @State private var keptSwaps: [KeptSwap] = []
+
+    /// A cook-mode swap and the edits that would keep it in the saved recipe.
+    struct KeptSwap: Identifiable {
+        let id: UUID
+        let label: String
+        let edits: [RecipeEdit]
+        var included = false
+    }
 
     static let quickChips = ["Too salty", "Too spicy", "Too bland", "Needed more time", "Perfect"]
 
@@ -66,6 +80,8 @@ struct AdjustRecipeView: View {
                     }
                 }
 
+                if !keptSwaps.isEmpty { swapsCard }
+
                 if let proposals {
                     proposalsCard(proposals)
                 }
@@ -99,7 +115,16 @@ struct AdjustRecipeView: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         }
-        .onAppear { rating = saved.rating ?? 0 }
+        .onAppear {
+            rating = saved.rating ?? 0
+            if keptSwaps.isEmpty {
+                let base = saved.recipe
+                keptSwaps = sessionSwaps.compactMap { swap in
+                    let edits = swap.recipeEdits(in: base)
+                    return edits.isEmpty ? nil : KeptSwap(id: swap.id, label: swap.label, edits: edits)
+                }
+            }
+        }
     }
 
     private func thumb(_ value: Int, symbol: String, label: String) -> some View {
@@ -118,6 +143,26 @@ struct AdjustRecipeView: View {
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier(value > 0 ? "adjust.thumbsUp" : "adjust.thumbsDown")
+    }
+
+    private var swapsCard: some View {
+        SectionCard(title: "While cooking") {
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                ForEach($keptSwaps) { $kept in
+                    Toggle(isOn: $kept.included) {
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                            Text("Keep this swap in the recipe?").foregroundStyle(Color.mise.ink)
+                            Text(kept.label).font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .tint(Color.mise.accent)
+                    .accessibilityIdentifier("adjust.keepSwap")
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("adjust.sessionSwaps")
     }
 
     private func proposalsCard(_ list: [EditProposal]) -> some View {
@@ -193,7 +238,8 @@ struct AdjustRecipeView: View {
     }
 
     private func save() {
-        var edits = (proposals ?? []).chosenEdits
+        // Kept cook-mode swaps first, then the feedback's edits.
+        var edits = keptSwaps.filter(\.included).flatMap(\.edits) + (proposals ?? []).chosenEdits
         // Feedback typed but never turned into suggestions is kept as a note, so nothing is lost.
         let pending = feedback
         if !pending.isEmpty && (proposals == nil || pending != proposedFor) {
@@ -210,6 +256,7 @@ struct AdjustRecipeView: View {
             saved.rating = 1
         }
         try? context.save()
+        onSaved()
         dismiss()
     }
 }

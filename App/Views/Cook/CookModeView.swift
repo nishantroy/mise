@@ -3,39 +3,80 @@ import RecipeKit
 
 /// Full-screen cook mode: the prep list first, then one step per page with "For this step"
 /// ingredients and tap-to-start timers. Keeps the screen awake while open.
+///
+/// "Out of something?" swaps or skips an ingredient for this cook only (`CookSwap`): the working
+/// recipe's amounts, step text, prep list and "For this step" follow, and "I made this" offers
+/// each swap unticked. The session (page, ticks, swaps, timers) is saved as it changes, so
+/// closing cook mode or the app being killed can be resumed from the recipe.
 struct CookModeView: View {
     /// The recipe as shown on the detail screen, already scaled to the chosen servings.
     let recipe: Recipe
-    /// "Done" on the last page: leads into "I made this".
-    var onFinish: () -> Void
+    let recipeID: UUID
+    /// `PrepPlanner.fingerprint` of the saved (unscaled) recipe, stored with the session.
+    let fingerprint: String
+    /// A session to pick up ("Resume cooking"), or nil to start fresh.
+    let resume: CookSession?
+    /// "Done" on the last page: leads into "I made this" with the session's swaps.
+    var onFinish: ([CookSwap]) -> Void
     var onClose: () -> Void
 
     @Environment(AssistantProvider.self) private var provider
+    @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
-    @State private var page = 0
+    @State private var page: Int
     @State private var forward = true
     @State private var plan: PrepPlan
-    @State private var checked: Set<String> = []
+    @State private var checked: Set<String>
     @State private var timers: CookTimerStore
     @State private var confirmExit = false
+    @State private var confirmClose = false
     @State private var exitFinishes = false
     @State private var previousIdleSetting = false
-    private let links: StepIngredientLinker.Links
-    private let stepTimers: [[CookTimerSpec]]
+    @State private var swaps: [CookSwap]
+    /// `recipe` with the swaps applied: what every page shows.
+    @State private var working: Recipe
+    /// Per step, "Swapped: sherry for Shaoxing wine" lines.
+    @State private var swapNotes: [Int: [String]]
+    @State private var links: StepIngredientLinker.Links
+    @State private var stepTimers: [[CookTimerSpec]]
+    @State private var showingOutOf = false
+    @State private var restored = false
+    /// Done or closed: stop saving the session.
+    @State private var ended = false
+    private let startedAt: Date
 
-    init(recipe: Recipe, onFinish: @escaping () -> Void, onClose: @escaping () -> Void) {
+    init(recipe: Recipe, recipeID: UUID = UUID(), fingerprint: String? = nil, resume: CookSession? = nil,
+         onFinish: @escaping ([CookSwap]) -> Void, onClose: @escaping () -> Void) {
         self.recipe = recipe
+        self.recipeID = recipeID
+        self.fingerprint = fingerprint ?? PrepPlanner.fingerprint(recipe)
+        self.resume = resume
         self.onFinish = onFinish
         self.onClose = onClose
-        links = StepIngredientLinker().links(for: recipe)
-        stepTimers = CookTimers.timers(for: recipe)
+        let swaps = resume?.swaps ?? []
+        let replay = CookSwapApplier.replay(swaps, on: recipe)
+        _swaps = State(initialValue: swaps)
+        _working = State(initialValue: replay.recipe)
+        _swapNotes = State(initialValue: replay.notes)
+        _links = State(initialValue: StepIngredientLinker().links(for: replay.recipe))
+        _stepTimers = State(initialValue: CookTimers.timers(for: replay.recipe))
         // Ingredient IDs don't change with scaling, so a plan cached for any servings fits.
         let cached = PrepPlanCache.plan(for: recipe, usesModel: true) ?? PrepPlanCache.plan(for: recipe, usesModel: false)
-        _plan = State(initialValue: cached ?? PrepPlanner().plan(for: recipe))
+        _plan = State(initialValue: resume?.plan ?? cached ?? PrepPlanner().plan(for: recipe))
+        _checked = State(initialValue: Set(resume?.checkedPrep ?? []))
+        _page = State(initialValue: min(max(resume?.page ?? 0, 0), recipe.steps.count))
         _timers = State(initialValue: CookTimerStore(recipeTitle: recipe.title))
+        startedAt = resume?.startedAt ?? .now
     }
 
-    private var lastPage: Int { recipe.steps.count }
+    private var lastPage: Int { working.steps.count }
+
+    /// The prep list with swapped ingredients replaced and fully skipped items hidden.
+    private var shownPlan: PrepPlan {
+        var map: [UUID: [UUID]] = [:]
+        for swap in swaps where !swap.isSkip { map[swap.original.id] = swap.replacements.map(\.id) }
+        return plan.substituting(map).visible(in: working)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,17 +102,41 @@ struct CookModeView: View {
         } message: {
             Text("Running timers will be cancelled.")
         }
+        .confirmationDialog("Leave cook mode?", isPresented: $confirmClose, titleVisibility: .visible) {
+            Button("Leave, timers keep running") { close(stoppingTimers: false) }
+                .accessibilityIdentifier("cook.leaveKeepTimers")
+            Button("Stop timers and leave", role: .destructive) { close(stoppingTimers: true) }
+                .accessibilityIdentifier("cook.leaveStopTimers")
+            Button("Keep cooking", role: .cancel) {}
+        } message: {
+            Text("You can pick up where you left off from the recipe.")
+        }
+        .sheet(isPresented: $showingOutOf) {
+            OutOfSomethingView(recipe: working, stepIndex: page > 0 ? page - 1 : nil, links: links, swaps: swaps,
+                               onChoose: { ingredient, suggestion, consequence in
+                                   applySwap(ingredient, suggestion: suggestion, consequence: consequence)
+                                   showingOutOf = false
+                               },
+                               onUndo: undo)
+        }
         .onAppear {
             previousIdleSetting = UIApplication.shared.isIdleTimerDisabled
             UIApplication.shared.isIdleTimerDisabled = true
+            restoreTimers()
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = previousIdleSetting
-            timers.cancelAll()
+            // Alarms keep running for a resumed session; only the in-app waits stop.
+            timers.suspend()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { timers.checkExpired() }
+            if phase != .active { persist() }
         }
+        .onChange(of: page) { persist() }
+        .onChange(of: checked) { persist() }
+        .onChange(of: swaps) { persist() }
+        .onChange(of: timers.timers) { persist() }
         .task { await refinePlan() }
         .task { await timers.observeAlarms() }
     }
@@ -92,11 +157,12 @@ struct CookModeView: View {
                 .accessibilityIdentifier("cook.close")
                 VStack(alignment: .leading, spacing: 0) {
                     Text(recipe.title).font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary).lineLimit(1)
-                    Text(page == 0 ? "Mise en place" : "Step \(page) of \(recipe.steps.count)")
+                    Text(page == 0 ? "Mise en place" : "Step \(page) of \(working.steps.count)")
                         .font(.headline).foregroundStyle(Color.mise.ink)
                         .accessibilityIdentifier("cook.pageTitle")
                 }
                 Spacer(minLength: 0)
+                outOfButton
             }
             ProgressView(value: Double(page), total: Double(max(lastPage, 1)))
                 .tint(Color.mise.accent)
@@ -104,6 +170,29 @@ struct CookModeView: View {
         }
         .padding(.horizontal, Theme.Spacing.gutter)
         .padding(.bottom, Theme.Spacing.xs)
+    }
+
+    /// "Out of something?": a quiet capsule in the header, on every page; shorter, then
+    /// icon-only, when the text doesn't fit.
+    private var outOfButton: some View {
+        Button { showingOutOf = true } label: {
+            ViewThatFits(in: .horizontal) {
+                Label("Out of something?", systemImage: "arrow.triangle.2.circlepath").lineLimit(1)
+                Label("Out of…", systemImage: "arrow.triangle.2.circlepath").lineLimit(1)
+                Image(systemName: "arrow.triangle.2.circlepath")
+            }
+            .font(Theme.Fonts.meta.weight(.semibold))
+            .padding(.horizontal, Theme.Spacing.s)
+            .frame(minWidth: Theme.Size.minTap, minHeight: Theme.Size.minTap)
+            .foregroundStyle(Color.mise.accent)
+            .background(Color.mise.surfaceSunken, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .layoutPriority(-1)
+        .accessibilityLabel("Out of something?")
+        .accessibilityHint("Swap or skip a missing ingredient for this cook")
+        .accessibilityIdentifier("cook.outOf")
     }
 
     private var navigationBar: some View {
@@ -153,12 +242,17 @@ struct CookModeView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                 Text("Mise en place").serifTitle(Theme.Fonts.header).accessibilityAddTraits(.isHeader)
-                if let servings = recipe.servings {
+                if let servings = working.servings {
                     Text("For \(servings) \(servings == 1 ? "serving" : "servings"). Tick things off as you go.")
                         .font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
                 }
             }
-            ForEach(plan.groups) { group in
+            if !swaps.isEmpty {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                    ForEach(swaps) { swap in swapNote(swap.label) }
+                }
+            }
+            ForEach(shownPlan.groups) { group in
                 SectionCard(title: group.kind.title) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                         ForEach(group.items) { item in prepRow(item, kind: group.kind) }
@@ -183,7 +277,7 @@ struct CookModeView: View {
                     .font(.title3)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                    Text(item.text(in: recipe))
+                    Text(item.text(in: working))
                         .font(.title3)
                         .foregroundStyle(done ? Color.mise.inkSecondary : Color.mise.ink)
                         .strikethrough(done, color: Color.mise.inkSecondary)
@@ -216,12 +310,17 @@ struct CookModeView: View {
                     .frame(minWidth: Theme.Size.minTap, minHeight: Theme.Size.minTap)
                     .background(Color.mise.accent, in: Circle())
                     .accessibilityHidden(true)
-                Text(recipe.steps[index])
+                Text(working.steps[index])
                     .font(.title2)
                     .foregroundStyle(Color.mise.ink)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Step \(index + 1). \(recipe.steps[index])")
+                    .accessibilityLabel("Step \(index + 1). \(working.steps[index])")
                     .accessibilityIdentifier("cook.stepText")
+            }
+            if let notes = swapNotes[index], !notes.isEmpty {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                    ForEach(notes, id: \.self) { swapNote($0) }
+                }
             }
             if !stepTimers[index].isEmpty {
                 // One row per timer: its name, then its controls.
@@ -234,7 +333,7 @@ struct CookModeView: View {
                 SectionCard(title: "For this step") {
                     VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                         ForEach(ids, id: \.self) { id in
-                            if let ing = recipe.ingredient(id: id) { ingredientRow(ing) }
+                            if let ing = working.ingredient(id: id) { ingredientRow(ing) }
                         }
                     }
                 }
@@ -242,6 +341,15 @@ struct CookModeView: View {
                 .accessibilityIdentifier("cook.forThisStep")
             }
         }
+    }
+
+    /// "Swapped: mirin for sherry" under a step (and on the prep page).
+    private func swapNote(_ text: String) -> some View {
+        Label(text, systemImage: "arrow.triangle.2.circlepath")
+            .font(Theme.Fonts.meta.weight(.semibold))
+            .foregroundStyle(Color.mise.caution)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("cook.swapNote")
     }
 
     private func ingredientRow(_ ing: Ingredient) -> some View {
@@ -460,27 +568,144 @@ struct CookModeView: View {
         withAnimation(.easeInOut(duration: 0.25)) { page = clamped }
     }
 
+    /// Done asks only when a timer is running (finishing stops them). Close keeps the session;
+    /// with timers running it asks whether they should keep going.
     private func requestExit(finishing: Bool) {
-        if timers.hasRunning {
-            exitFinishes = finishing
-            confirmExit = true
+        if finishing {
+            if timers.hasRunning {
+                exitFinishes = true
+                confirmExit = true
+            } else {
+                leave(finishing: true)
+            }
+        } else if timers.hasRunning {
+            confirmClose = true
         } else {
-            leave(finishing: finishing)
+            close(stoppingTimers: false)
         }
     }
 
+    /// Finished: timers stop and the session is cleared.
     private func leave(finishing: Bool) {
         timers.cancelAll()
-        if finishing { onFinish() } else { onClose() }
+        ended = true
+        CookSessionStore.clear(recipeID)
+        if finishing { onFinish(swaps) } else { onClose() }
+    }
+
+    /// Closed with ✕: the session is kept for "Resume cooking".
+    private func close(stoppingTimers: Bool) {
+        if stoppingTimers { timers.cancelAll() } else { timers.suspend() }
+        persist()
+        ended = true
+        onClose()
+    }
+
+    // MARK: Session
+
+    private func persist() {
+        guard !ended, restored else { return }
+        let session = CookSession(recipeID: recipeID, fingerprint: fingerprint, servings: recipe.servings, page: page,
+                                  checkedPrep: Array(checked).sorted(), plan: plan, swaps: swaps,
+                                  timers: timers.sessionTimers, startedAt: startedAt, updatedAt: .now)
+        CookSessionStore.save(session)
+    }
+
+    /// A resumed session's timers, matched with the alarms that still exist (stopped ones are
+    /// dropped; ones whose time has passed are done).
+    private func restoreTimers() {
+        guard !restored else { return }
+        if let resume, !resume.timers.isEmpty {
+            let reconciled = CookTimerReconciler.reconcile(resume.timers, alarms: CookSessionStore.alarmStates(), now: .now)
+            timers.restore(reconciled)
+        }
+        restored = true
+        persist()
+    }
+
+    // MARK: Swaps
+
+    /// Applies a swap (nil suggestion: skip) to this cook: working recipe, prep ticks (an item that
+    /// now needs a different ingredient is unticked), pantry ("missing"), then asks the model for
+    /// tidier step wording if it can answer quickly.
+    private func applySwap(_ ingredient: Ingredient, suggestion: SwapSuggestion?, consequence: String?) {
+        var swap = CookSwap.make(original: ingredient, suggestion: suggestion, consequence: consequence)
+        let key = IngredientCatalog.shared.pantryKey(for: ingredient)
+        swap.pantryKey = key
+        swap.pantryBefore = context.pantryStatus(key: key)?.rawValue
+        context.setPantry(key: key, displayName: ingredient.name, status: .missing)
+        try? context.save()
+        if !swap.isSkip {
+            for id in plan.itemIDs(covering: ingredient.id) { checked.remove(id) }
+        }
+        withAnimation { swaps.append(swap) }
+        recompute()
+        if provider.usesModel, !swap.isSkip { Task { await reword(swap) } }
+    }
+
+    private func undo(_ swap: CookSwap) {
+        withAnimation { swaps.removeAll { $0.id == swap.id } }
+        recompute()
+        if let key = swap.pantryKey {
+            if let before = swap.pantryBefore.flatMap(PantryStatus.init(rawValue:)) {
+                context.setPantry(key: key, displayName: swap.original.name, status: before)
+            } else {
+                context.removePantry(key: key)
+            }
+            try? context.save()
+        }
+    }
+
+    private func recompute() {
+        let replay = CookSwapApplier.replay(swaps, on: recipe)
+        working = replay.recipe
+        swapNotes = replay.notes
+        links = StepIngredientLinker().links(for: replay.recipe)
+        stepTimers = CookTimers.timers(for: replay.recipe)
+    }
+
+    /// The validated single-step rewrite, only when the model answers within a few seconds
+    /// (otherwise the rules' text stays). Only for a swap that leaves a step naming the new
+    /// ingredient twice, and not when the amount in the text was rescaled.
+    private func reword(_ swap: CookSwap) async {
+        guard let index = swaps.firstIndex(where: { $0.id == swap.id }),
+              CookSwapApplier.amountRatio(swap.original, swap.replacements) == nil else { return }
+        let before = CookSwapApplier.replay(Array(swaps[..<index]), on: recipe).recipe
+        let edit = RecipeEdit.replaceIngredient(id: swap.original.id, with: swap.replacements, reason: nil)
+        guard !StepRewrites.requests(recipe: before, edits: [edit]).isEmpty else { return }
+        let assistant = provider.assistant
+        let proposals = await withTaskGroup(of: [StepRewriteProposal]?.self) { group -> [StepRewriteProposal] in
+            group.addTask { try? await assistant.proposeStepRewrites(recipe: before, edits: [edit], feedback: "") }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(6))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? []
+        }
+        guard !proposals.isEmpty, let current = swaps.firstIndex(where: { $0.id == swap.id }) else { return }
+        var plain = swaps[current]
+        plain.reworded = []
+        let rulesText = CookSwapApplier.replay(Array(swaps[..<current]) + [plain], on: recipe).recipe.steps
+        let patches = proposals.compactMap { p -> StepPatch? in
+            guard rulesText.indices.contains(p.stepIndex) else { return nil }
+            return StepPatch(stepIndex: p.stepIndex, from: rulesText[p.stepIndex], to: p.newText)
+        }
+        guard !patches.isEmpty else { return }
+        swaps[current].reworded = patches
+        recompute()
     }
 
     /// Computed when cook mode opens and cached per recipe revision. With the model on, its plan
     /// replaces the rules' one only if nothing has been ticked yet, so the list never shifts
     /// under the cook's finger.
     private func refinePlan() async {
+        // A resumed session keeps the list it was ticking.
+        guard resume?.plan == nil else { return }
         let usesModel = provider.usesModel
         if let cached = PrepPlanCache.plan(for: recipe, usesModel: usesModel) {
-            if checked.isEmpty { plan = cached }
+            if checked.isEmpty && swaps.isEmpty { plan = cached }
             return
         }
         guard usesModel else {
@@ -490,18 +715,20 @@ struct CookModeView: View {
         let assistant = provider.assistant
         let refined = (try? await assistant.planPrep(recipe: recipe)) ?? plan
         PrepPlanCache.store(refined, for: recipe, usesModel: true)
-        if checked.isEmpty { withAnimation { plan = refined } }
+        if checked.isEmpty && swaps.isEmpty { withAnimation { plan = refined } }
     }
 }
 
 #Preview("Light") {
-    CookModeView(recipe: PreviewData.recipe, onFinish: {}, onClose: {})
+    CookModeView(recipe: PreviewData.recipe, onFinish: { _ in }, onClose: {})
         .environment(AssistantProvider())
+        .modelContainer(PreviewData.container)
 }
 
 #Preview("Dark, largest text") {
-    CookModeView(recipe: PreviewData.recipe, onFinish: {}, onClose: {})
+    CookModeView(recipe: PreviewData.recipe, onFinish: { _ in }, onClose: {})
         .environment(AssistantProvider())
+        .modelContainer(PreviewData.container)
         .preferredColorScheme(.dark)
         .dynamicTypeSize(.accessibility5)
 }

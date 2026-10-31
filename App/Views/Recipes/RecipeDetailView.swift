@@ -15,6 +15,12 @@ struct RecipeDetailView: View {
     @State private var showingCook = false
     /// Cook mode ended with "Done", so "I made this" opens once it has closed.
     @State private var cookFinished = false
+    /// Swaps made while cooking, offered (unticked) in "I made this".
+    @State private var finishedSwaps: [CookSwap] = []
+    /// A cooking session that can be resumed ("Resume cooking (step 7)").
+    @State private var session: CookSession?
+    /// The session cook mode opens with; nil starts fresh.
+    @State private var resuming: CookSession?
     @State private var showingMyVersion = false
     @State private var confirmReset = false
     @State private var confirmDelete = false
@@ -56,22 +62,32 @@ struct RecipeDetailView: View {
             .background(Color.mise.background)
         }
         .fullScreenCover(isPresented: $showingCook, onDismiss: {
+            loadSession()
             // "Done" in cook mode leads into "I made this".
             if cookFinished {
                 cookFinished = false
                 showingAdjust = true
             }
         }) {
-            CookModeView(recipe: displayed, onFinish: {
-                cookFinished = true
-                showingCook = false
-            }, onClose: { showingCook = false })
+            CookModeView(recipe: displayed, recipeID: saved.id, fingerprint: PrepPlanner.fingerprint(recipe), resume: resuming,
+                         onFinish: { swaps in
+                             finishedSwaps = swaps
+                             cookFinished = true
+                             showingCook = false
+                         }, onClose: { showingCook = false })
         }
+        .onAppear { loadSession() }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button("Paste my version", systemImage: "doc.on.clipboard") { showingMyVersion = true }
+                    if session != nil {
+                        Button("I made this", systemImage: "checkmark.circle") {
+                            finishedSwaps = session?.swaps ?? []
+                            showingAdjust = true
+                        }
+                    }
                     Button("Check ingredients", systemImage: "checklist") { showingCheck = true }
                     Button("Re-check time and cuisine", systemImage: "clock.arrow.circlepath") { recheck() }
                         .disabled(rechecking)
@@ -110,9 +126,13 @@ struct RecipeDetailView: View {
                     }
             }
         }
-        .sheet(isPresented: $showingAdjust) {
+        .sheet(isPresented: $showingAdjust, onDismiss: { finishedSwaps = [] }) {
             NavigationStack {
-                AdjustRecipeView(saved: saved)
+                AdjustRecipeView(saved: saved, sessionSwaps: finishedSwaps) {
+                    // Logged as cooked: the session is over (its alarms are left alone).
+                    CookSessionStore.clear(saved.id)
+                    session = nil
+                }
             }
         }
         .sheet(isPresented: $showingMyVersion) {
@@ -127,10 +147,33 @@ struct RecipeDetailView: View {
 
     // MARK: Sections
 
-    /// "Start cooking" (cook mode, at the servings chosen above) and "I made this".
+    /// "Start cooking" (cook mode, at the servings chosen above) and "I made this"; or, with a
+    /// session to pick up, "Resume cooking (step 7)" and "Start over".
     @ViewBuilder
     private var bottomActions: some View {
-        Button { showingCook = true } label: {
+        if let session {
+            Button { resume(session) } label: {
+                Label(session.page == 0 ? "Resume cooking" : "Resume cooking (step \(session.page))", systemImage: "frying.pan")
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(.misePrimary)
+            .accessibilityIdentifier("detail.resumeCooking")
+            Button { startOver(session) } label: {
+                Text("Start over").fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(.miseSecondaryTall)
+            .accessibilityIdentifier("detail.startOver")
+        } else {
+            startButtons
+        }
+    }
+
+    @ViewBuilder
+    private var startButtons: some View {
+        Button {
+            resuming = nil
+            showingCook = true
+        } label: {
             Label("Start cooking", systemImage: "frying.pan").fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.misePrimary)
@@ -171,6 +214,25 @@ struct RecipeDetailView: View {
     }
 
     // MARK: Actions
+
+    private func loadSession() {
+        session = CookSessionStore.resumable(for: saved.id, recipe: saved.recipe)
+    }
+
+    /// Opens cook mode where the session left off, at its servings.
+    private func resume(_ session: CookSession) {
+        servings = session.servings == recipe.servings ? nil : session.servings
+        resuming = session
+        showingCook = true
+    }
+
+    /// Drops the session (cancelling its alarms) and starts cooking from the prep list.
+    private func startOver(_ session: CookSession) {
+        CookSessionStore.discard(session)
+        self.session = nil
+        resuming = nil
+        showingCook = true
+    }
 
     private func setCuisine(_ cuisine: String?) {
         saved.setCuisine(cuisine)
