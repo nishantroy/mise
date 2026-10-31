@@ -30,7 +30,13 @@ final class CookTimerStore {
         /// The AlarmKit alarm currently scheduled for it, if any.
         var alarmID: UUID?
 
-        var title: String { "Step \(step + 1) · \(name)" }
+        /// "Step 7 · Brown the beef", or "Step 7 timer" when the rules found no name.
+        var title: String { Self.isFallback(name, step: step) ? name : "Step \(step + 1) · \(name)" }
+        /// For the timer strip: "Brown the beef", or "Step 7".
+        var shortName: String { Self.isFallback(name, step: step) ? "Step \(step + 1)" : name }
+
+        /// `TimerLabeler`'s "Step N timer".
+        static func isFallback(_ name: String, step: Int) -> Bool { name == "Step \(step + 1) timer" }
         func remaining(at now: Date) -> TimeInterval { max(0, endDate.timeIntervalSince(now)) }
     }
 

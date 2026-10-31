@@ -224,8 +224,9 @@ struct CookModeView: View {
                     .accessibilityIdentifier("cook.stepText")
             }
             if !stepTimers[index].isEmpty {
-                FlowLayout(spacing: Theme.Spacing.xs) {
-                    ForEach(stepTimers[index]) { spec in timerChip(spec) }
+                // One row per timer: its name, then its controls.
+                VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                    ForEach(stepTimers[index]) { spec in timerRow(spec) }
                 }
             }
             let ids = links.forStep(index)
@@ -259,38 +260,75 @@ struct CookModeView: View {
         .accessibilityIdentifier("cook.ingredient")
     }
 
+    /// A timer's name ("Brown the beef") beside its controls, or above them when they don't fit
+    /// (long names, large Dynamic Type). The countdown never wraps.
+    private func timerRow(_ spec: CookTimerSpec) -> some View {
+        let name = Text(CookTimerStore.RunningTimer.isFallback(spec.title, step: spec.step) ? "Timer" : spec.title)
+            .font(Theme.Fonts.meta.weight(.semibold))
+            .foregroundStyle(Color.mise.ink)
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: Theme.Spacing.s) {
+                name.lineLimit(1)
+                Spacer(minLength: Theme.Spacing.xs)
+                timerControls(spec, compact: false)
+            }
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                name.fixedSize(horizontal: false, vertical: true)
+                timerControls(spec, compact: false)
+            }
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                name.fixedSize(horizontal: false, vertical: true)
+                timerControls(spec, compact: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
     /// Tap starts the timer (a range's high end). While running: tap stops it, and −1 min /
-    /// +1 min sit either side.
+    /// +1 min sit either side ("−1" / "+1" when space is short).
     @ViewBuilder
-    private func timerChip(_ spec: CookTimerSpec) -> some View {
+    private func timerControls(_ spec: CookTimerSpec, compact: Bool) -> some View {
         if let running = timers.running(for: spec) {
-            HStack(spacing: Theme.Spacing.xxs) {
-                adjustButton("−1 min", label: "Take a minute off \(spec.label) timer", id: "cook.timer.\(spec.position).minus") {
+            HStack(spacing: Theme.Spacing.xs) {
+                adjustButton(compact ? "−1" : "−1 min", label: "Take a minute off \(spec.label) timer",
+                             id: "cook.timer.\(spec.position).minus") {
                     timers.adjust(running.id, by: -60)
                 }
                 .disabled(!CookTimerAdjust.canShorten(remaining: running.remaining(at: .now)))
                 Button { timers.cancel(running.id) } label: {
                     chipLabel(icon: "stop.fill", running: true) {
                         TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text(CookTimers.clock(running.remaining(at: context.date))).monospacedDigit()
+                            countdown(running.remaining(at: context.date))
                         }
                     }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Stop \(spec.label) timer")
                 .accessibilityIdentifier("cook.timer.\(spec.position)")
-                adjustButton("+1 min", label: "Add a minute to \(spec.label) timer", id: "cook.timer.\(spec.position).plus") {
+                adjustButton(compact ? "+1" : "+1 min", label: "Add a minute to \(spec.label) timer",
+                             id: "cook.timer.\(spec.position).plus") {
                     timers.adjust(running.id, by: 60)
                 }
             }
+            .fixedSize()
         } else {
             Button { timers.start(spec) } label: {
-                chipLabel(icon: "timer", running: false) { Text(spec.label) }
+                chipLabel(icon: "timer", running: false) { Text(spec.label).lineLimit(1) }
             }
             .buttonStyle(.plain)
+            .fixedSize()
             .accessibilityLabel("Start \(spec.label) timer")
             .accessibilityIdentifier("cook.timer.\(spec.position)")
         }
+    }
+
+    /// "2:58" in fixed-width digits, on one line.
+    private func countdown(_ remaining: TimeInterval) -> some View {
+        Text(CookTimers.clock(remaining))
+            .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize()
     }
 
     private func chipLabel<Content: View>(icon: String, running: Bool, @ViewBuilder content: () -> Content) -> some View {
@@ -299,7 +337,7 @@ struct CookModeView: View {
             content()
         }
         .font(.headline)
-        .padding(.horizontal, Theme.Spacing.m)
+        .padding(.horizontal, Theme.Spacing.s)
         .frame(minHeight: Theme.Size.minTap)
         .foregroundStyle(running ? Color.mise.onAccent : Color.mise.accent)
         .background(running ? Color.mise.accent : Color.mise.surfaceSunken, in: Capsule())
@@ -311,8 +349,9 @@ struct CookModeView: View {
             Text(title)
                 .font(Theme.Fonts.meta.weight(.semibold))
                 .monospacedDigit()
+                .lineLimit(1)
                 .padding(.horizontal, Theme.Spacing.s)
-                .frame(minHeight: Theme.Size.minTap)
+                .frame(minWidth: Theme.Size.minTap, minHeight: Theme.Size.minTap)
                 .foregroundStyle(Color.mise.accent)
                 .background(Color.mise.surfaceSunken, in: Capsule())
                 .contentShape(Capsule())
@@ -332,12 +371,13 @@ struct CookModeView: View {
                         Button { go(to: timer.step + 1) } label: {
                             HStack(spacing: Theme.Spacing.xxs) {
                                 Image(systemName: timer.finished ? "bell.fill" : "timer")
-                                Text("Step \(timer.step + 1)")
+                                // Names are at most four words; the strip scrolls sideways.
+                                Text(timer.shortName).lineLimit(1).fixedSize()
                                 if timer.finished {
-                                    Text("Done")
+                                    Text("Done").lineLimit(1).fixedSize()
                                 } else {
                                     TimelineView(.periodic(from: .now, by: 1)) { context in
-                                        Text(CookTimers.clock(timer.remaining(at: context.date))).monospacedDigit()
+                                        countdown(timer.remaining(at: context.date))
                                     }
                                 }
                             }
@@ -357,6 +397,7 @@ struct CookModeView: View {
                     .foregroundStyle(timer.finished ? Color.mise.onAccent : Color.mise.ink)
                     .background(timer.finished ? Color.mise.herb : Color.mise.surfaceSunken, in: Capsule())
                     .buttonStyle(.plain)
+                    .fixedSize()
                 }
             }
             .padding(.horizontal, Theme.Spacing.gutter)
