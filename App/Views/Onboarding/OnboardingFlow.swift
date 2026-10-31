@@ -8,6 +8,7 @@ struct OnboardingFlow: View {
     @State private var step = 0
     @State private var prefs = UserPreferences()
     @State private var pantryPicks: Set<String> = []
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private static let pageCount = 4
     private let questions = ["What do you eat?", "Anything you'd rather skip?", "How do you cook?", "What's in your pantry?"]
@@ -42,8 +43,12 @@ struct OnboardingFlow: View {
 
             VStack(spacing: Theme.Spacing.m) {
                 PageDots(count: Self.pageCount, current: step)
-                HStack(spacing: Theme.Spacing.s) {
-                    if step > 0 {
+                // Side by side normally; stacked (primary first) at accessibility text sizes.
+                let layout = typeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(spacing: Theme.Spacing.xs))
+                    : AnyLayout(HStackLayout(spacing: Theme.Spacing.s))
+                layout {
+                    if step > 0 && !typeSize.isAccessibilitySize {
                         Button("Back") { withAnimation { step -= 1 } }
                             .buttonStyle(.miseSecondary)
                             .accessibilityIdentifier("onboarding.back")
@@ -56,6 +61,11 @@ struct OnboardingFlow: View {
                         Button("Get started", action: finish)
                             .buttonStyle(.misePrimary)
                             .accessibilityIdentifier("onboarding.finish")
+                    }
+                    if step > 0 && typeSize.isAccessibilitySize {
+                        Button("Back") { withAnimation { step -= 1 } }
+                            .buttonStyle(.miseSecondaryWide)
+                            .accessibilityIdentifier("onboarding.back")
                     }
                 }
             }

@@ -174,6 +174,17 @@ struct FeedbackParserTests {
         #expect(e.contains(.addNote("Use less salt than last time")))
     }
 
+    @Test func replaceBeatsTasteScaleOnSameIngredient() {
+        let r = IngredientCatalog.shared.annotate(Recipe(title: "Pork", ingredients: [
+            "3 tbsp light soy sauce", "1 tbsp dark soy sauce",
+        ].map(IngredientLineParser.parse)))
+        let e = FeedbackParser.edits(from: "Too salty. Used light soy sauce instead of dark soy sauce", recipe: r)
+        #expect(e.count == 2, "\(e)")
+        #expect(e[0] == .scaleIngredient(id: r.ingredients[0].id, factor: 0.75))
+        guard case .replaceIngredient(let target, _, _) = e[1] else { Issue.record("replace"); return }
+        #expect(target == r.ingredients[1].id)
+    }
+
     @Test func unmatchedBecomesNote() {
         #expect(edits("The kids loved it. Serve with rice") == [.addNote("The kids loved it"), .addNote("Serve with rice")])
     }

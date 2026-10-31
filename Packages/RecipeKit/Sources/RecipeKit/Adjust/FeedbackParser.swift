@@ -38,7 +38,27 @@ public struct FeedbackParser: Sendable {
                 if !edits.contains(.addNote(note)) { edits.append(.addNote(note)) }
             }
         }
-        return edits
+        return Self.resolvingConflicts(edits)
+    }
+
+    /// An explicit replace or remove beats a scale of the same ingredient ("too salty" + "used
+    /// light soy sauce instead of dark" shouldn't also shrink the dark soy sauce), and only the
+    /// first scale per ingredient is kept.
+    static func resolvingConflicts(_ edits: [RecipeEdit]) -> [RecipeEdit] {
+        var replaced: Set<UUID> = []
+        for edit in edits {
+            switch edit {
+            case .replaceIngredient(let id, _, _), .removeIngredient(let id): replaced.insert(id)
+            default: break
+            }
+        }
+        var scaled: Set<UUID> = []
+        return edits.filter { edit in
+            guard case .scaleIngredient(let id, _) = edit else { return true }
+            if replaced.contains(id) || scaled.contains(id) { return false }
+            scaled.insert(id)
+            return true
+        }
     }
 
     static func sentences(_ text: String) -> [String] {

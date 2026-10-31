@@ -44,6 +44,8 @@ struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(Theme.Fonts.button)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
             .foregroundStyle(Color.mise.onAccent)
             .frame(maxWidth: .infinity, minHeight: Theme.Size.primaryButtonHeight)
             .padding(.horizontal, Theme.Spacing.m)
