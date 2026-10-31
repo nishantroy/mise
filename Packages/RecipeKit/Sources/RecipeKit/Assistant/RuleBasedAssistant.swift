@@ -19,4 +19,12 @@ public struct RuleBasedAssistant: RecipeAssistant {
         let id = ingredient.catalogID ?? catalog.match(ingredient.name)?.id
         return SwapEngine(catalog: catalog).suggestions(for: id, pantry: pantry, prefs: prefs, ensureLeaveOut: true)
     }
+
+    public func guessCuisine(recipe: Recipe) async throws -> String? {
+        CuisineGuesser(catalog: catalog).guess(recipe)
+    }
+
+    public func estimateTime(recipe: Recipe) async throws -> TimeEstimate {
+        TimeEstimator(catalog: catalog).estimate(recipe)
+    }
 }

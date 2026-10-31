@@ -7,11 +7,14 @@ struct RecipeDetailView: View {
 
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @Environment(AssistantProvider.self) private var provider
+    @Query private var profiles: [UserProfile]
     @State private var servings: Int?
     @State private var showingCheck = false
     @State private var showingAdjust = false
     @State private var confirmReset = false
     @State private var confirmDelete = false
+    @State private var rechecking = false
 
     private var recipe: Recipe { saved.recipe }
     private var displayed: Recipe {
@@ -51,6 +54,8 @@ struct RecipeDetailView: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button("Check ingredients", systemImage: "checklist") { showingCheck = true }
+                    Button("Re-check time and cuisine", systemImage: "clock.arrow.circlepath") { recheck() }
+                        .disabled(rechecking)
                     if let url = recipe.sourceURL {
                         Link(destination: url) { Label("Open original page", systemImage: "safari") }
                     }
@@ -100,8 +105,17 @@ struct RecipeDetailView: View {
             Text(recipe.title).serifTitle(Theme.Fonts.header).accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("detail.title")
             HStack(spacing: Theme.Spacing.s) {
-                let meta = RecipeFormat.metadata(recipe)
-                if !meta.isEmpty { Text(meta) }
+                if let time = RecipeFormat.time(recipe) {
+                    Text(time).accessibilityLabel(recipe.displayTime?.isEstimate == true ? "About \(time.dropFirst()), estimated" : time)
+                        .accessibilityIdentifier("detail.time")
+                }
+                if let cuisine = recipe.cuisine, !cuisine.isEmpty {
+                    if recipe.cuisineIsGuess {
+                        CuisineGuessMenu(cuisine: cuisine, onPick: setCuisine, onClear: { setCuisine(nil) })
+                    } else {
+                        Text(cuisine).accessibilityIdentifier("detail.cuisine")
+                    }
+                }
                 if saved.timesCooked > 0 { Text("Cooked \(saved.timesCooked)×") }
                 if let rating = saved.rating, rating != 0 {
                     Image(systemName: rating > 0 ? "hand.thumbsup.fill" : "hand.thumbsdown.fill")
@@ -110,11 +124,33 @@ struct RecipeDetailView: View {
             }
             .font(Theme.Fonts.meta)
             .foregroundStyle(Color.mise.inkSecondary)
+            TimeInsightView(recipe: recipe, prefs: profiles.first?.prefs, isRechecking: rechecking)
             if let host = recipe.sourceURL?.host() {
                 Text(host.replacingOccurrences(of: "www.", with: ""))
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(Color.mise.inkSecondary)
             }
+        }
+    }
+
+    // MARK: Actions
+
+    private func setCuisine(_ cuisine: String?) {
+        saved.setCuisine(cuisine)
+        try? context.save()
+    }
+
+    /// Re-runs the cuisine guess and time estimate (fills in recipes saved before they existed).
+    private func recheck() {
+        rechecking = true
+        let current = saved.recipe
+        let assistant = provider.assistant
+        Task {
+            let enriched = await RecipeInsights.enrich(current, using: assistant)
+            saved.updateInsights(cuisineGuess: enriched.cuisineIsGuess ? enriched.cuisine : nil,
+                                 estimate: enriched.timeEstimate)
+            try? context.save()
+            rechecking = false
         }
     }
 

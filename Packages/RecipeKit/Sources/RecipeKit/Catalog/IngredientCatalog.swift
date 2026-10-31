@@ -14,9 +14,20 @@ public struct CatalogEntry: Codable, Hashable, Sendable, Identifiable {
     public var commonness: Commonness
     public var category: String
     public var tags: Set<IngredientTag>
+    /// Cuisines this ingredient points to (from `UserPreferences.cuisineChoices`). Only set on
+    /// entries that say something about the cuisine; generic ones (garlic, onion) have none.
+    public var cuisines: [String]? = nil
+    /// Vote weight per listed cuisine. Defaults to 3 for a single cuisine, 1 when several share it.
+    public var cuisineWeight: Int? = nil
 
     /// The first alias, used when an ingredient is written into a recipe.
     public var displayName: String { names.first ?? id }
+
+    /// Weight this entry adds to each of its cuisines when guessing.
+    public var cuisineVote: Int {
+        guard let cuisines, !cuisines.isEmpty else { return 0 }
+        return cuisineWeight ?? (cuisines.count == 1 ? 3 : 1)
+    }
 }
 
 public enum SwapQuality: String, Codable, Hashable, Sendable, CaseIterable {

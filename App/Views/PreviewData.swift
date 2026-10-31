@@ -30,6 +30,18 @@ enum PreviewData {
         ]
     ))
 
+    /// No stated time and no page cuisine: shows the estimate ("~") and a guessed cuisine.
+    static let guessedRecipe: Recipe = {
+        let base = IngredientCatalog.shared.annotate(Recipe(
+            title: "Kung Pao Chicken",
+            servings: 4,
+            ingredients: ["1 lb chicken", "1 tbsp oyster sauce", "1 tbsp hoisin sauce", "½ cup peanuts"]
+                .map(IngredientLineParser.parse),
+            steps: ["Marinate the chicken for ½ hour.", "Stir fry for about 4 minutes.", "Add the sauce and cook for 1 minute."]
+        ))
+        return base.withInsights(cuisineGuess: CuisineGuesser().guess(base), estimate: TimeEstimator().estimate(base))
+    }()
+
     static let container: ModelContainer = {
         let container = Persistence.inMemory()
         let context = container.mainContext
@@ -42,6 +54,7 @@ enum PreviewData {
         let saved = SavedRecipe(original: recipe)
         saved.revisions = [RecipeRevision(summary: "Imported", edits: [])]
         context.insert(saved)
+        context.insert(SavedRecipe(original: guessedRecipe))
         return container
     }()
 }

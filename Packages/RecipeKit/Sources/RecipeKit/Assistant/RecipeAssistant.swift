@@ -7,4 +7,19 @@ public protocol RecipeAssistant: Sendable {
     func proposeEdits(recipe: Recipe, feedback: String, prefs: UserPreferences) async throws -> [RecipeEdit]
     func suggestSwaps(for ingredient: Ingredient, in recipe: Recipe,
                       pantry: PantrySnapshot, prefs: UserPreferences) async throws -> [SwapSuggestion]
+    /// A cuisine from `CuisineGuesser.vocabulary`, or nil when there's no clear answer.
+    func guessCuisine(recipe: Recipe) async throws -> String?
+    /// A realistic time estimate. The rules do the arithmetic; a model may only fill gaps.
+    func estimateTime(recipe: Recipe) async throws -> TimeEstimate
+}
+
+extension RecipeAssistant {
+    /// Default: the rules, so every assistant can answer.
+    public func guessCuisine(recipe: Recipe) async throws -> String? {
+        CuisineGuesser().guess(recipe)
+    }
+
+    public func estimateTime(recipe: Recipe) async throws -> TimeEstimate {
+        TimeEstimator().estimate(recipe)
+    }
 }

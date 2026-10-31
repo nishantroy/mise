@@ -58,6 +58,28 @@ extension SchemaV1 {
             updatedAt = now
         }
 
+        /// The user picked (or confirmed) a cuisine, or cleared a guessed one. A plain edit,
+        /// recorded as a revision with no recipe edits (like "Reset to original").
+        func setCuisine(_ cuisine: String?, now: Date = Date()) {
+            var current = recipe
+            let old = current.cuisine
+            current.cuisine = cuisine
+            current.cuisineIsGuess = false
+            recipe = current
+            let summary = cuisine.map { "Cuisine set to \($0)" } ?? "Cleared the cuisine\(old.map { " (\($0))" } ?? "")"
+            revisions.append(RecipeRevision(date: now, summary: summary, edits: []))
+            updatedAt = now
+        }
+
+        /// Writes a re-checked cuisine guess and time estimate onto the current and original
+        /// versions (so "Reset to original" keeps them). A page or user cuisine is never replaced.
+        /// Not a revision: it's metadata, not a change to the recipe.
+        func updateInsights(cuisineGuess: String?, estimate: TimeEstimate?) {
+            let base = original
+            recipe = recipe.withInsights(cuisineGuess: cuisineGuess, estimate: estimate)
+            originalData = ModelCoding.encode(base.withInsights(cuisineGuess: cuisineGuess, estimate: estimate))
+        }
+
         /// Restores the imported version, recorded as a revision so history is kept.
         func resetToOriginal(now: Date = Date()) {
             recipe = original

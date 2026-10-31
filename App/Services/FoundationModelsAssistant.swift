@@ -51,6 +51,44 @@ struct SwapPlan {
     var swaps: [GeneratedSwap]
 }
 
+@Generable
+enum GeneratedCuisine {
+    case indian, chinese, japanese, korean, thai, italian, mexican, middleEastern, french, american, other
+
+    /// The label `CuisineGuesser.mapModelChoice` understands.
+    var label: String {
+        switch self {
+        case .indian: "Indian"
+        case .chinese: "Chinese"
+        case .japanese: "Japanese"
+        case .korean: "Korean"
+        case .thai: "Thai"
+        case .italian: "Italian"
+        case .mexican: "Mexican"
+        case .middleEastern: "Middle Eastern"
+        case .french: "French"
+        case .american: "American"
+        case .other: "Other"
+        }
+    }
+}
+
+@Generable(description: "The cuisine a recipe belongs to.")
+struct CuisineChoice {
+    @Guide(description: "The best fit. Use other when none fits or it's unclear.")
+    var cuisine: GeneratedCuisine
+}
+
+@Generable(description: "Minutes for work the recipe doesn't time.")
+struct TimeGaps {
+    @Guide(description: "Minutes to chop, measure and prepare the listed ingredients.", .range(0...90))
+    var prepMinutes: Int
+    @Guide(description: "Minutes for untimed work such as preheating the oven, boiling water, or cooking until golden. 0 if none.", .range(0...180))
+    var untimedMinutes: Int
+    @Guide(description: "One short sentence explaining the estimate.")
+    var reason: String
+}
+
 // MARK: - Assistant
 
 /// On-device model assistant. Uses the rules as hints and falls back to them silently on any error.
@@ -99,7 +137,103 @@ struct FoundationModelsAssistant: RecipeAssistant {
         }
     }
 
+    /// Rules first; the model is asked only when they find no clear winner or a weak one.
+    func guessCuisine(recipe: Recipe) async throws -> String? {
+        let rules = CuisineGuesser().analyse(recipe)
+        guard !rules.isStrong, SystemLanguageModel.default.isAvailable else { return rules.cuisine }
+        let prompt = Self.cuisinePrompt(recipe: recipe)
+        do {
+            let choice = try await Self.withTimeout(Self.insightTimeout) {
+                let session = LanguageModelSession(instructions: Self.cuisineInstructions)
+                return try await session.respond(to: prompt, generating: CuisineChoice.self,
+                                                 options: GenerationOptions(temperature: 0)).content
+            }
+            Self.debugLog("guessCuisine", prompt: prompt, output: "\(choice) (rules: \(rules.cuisine ?? "nil"), score \(rules.score))")
+            return CuisineGuesser.mapModelChoice(choice.cuisine.label)
+        } catch {
+            Self.log.error("guessCuisine fell back to rules: \(String(describing: error), privacy: .public)")
+            return rules.cuisine
+        }
+    }
+
+    /// The rules extract durations and do the arithmetic; the model only fills in prep and
+    /// untimed work. Any error or timeout gives the rules' estimate.
+    func estimateTime(recipe: Recipe) async throws -> TimeEstimate {
+        let estimator = TimeEstimator()
+        guard SystemLanguageModel.default.isAvailable else { return estimator.estimate(recipe) }
+        let prompt = Self.timePrompt(recipe: recipe, analysis: estimator.analyse(recipe))
+        do {
+            let gaps = try await Self.withTimeout(Self.insightTimeout) {
+                let session = LanguageModelSession(instructions: Self.timeInstructions)
+                return try await session.respond(to: prompt, generating: TimeGaps.self,
+                                                 options: GenerationOptions(temperature: 0.2)).content
+            }
+            Self.debugLog("estimateTime", prompt: prompt, output: "\(gaps)")
+            return estimator.estimate(recipe, gaps: TimeGapProposal(prepMinutes: gaps.prepMinutes,
+                                                                    untimedMinutes: gaps.untimedMinutes,
+                                                                    reason: gaps.reason))
+        } catch {
+            Self.log.error("estimateTime fell back to rules: \(String(describing: error), privacy: .public)")
+            return estimator.estimate(recipe)
+        }
+    }
+
+    /// Import waits for these calls, so they get a deadline.
+    static let insightTimeout: Duration = .seconds(12)
+
+    struct TimeoutError: Error {}
+
+    static func withTimeout<T: Sendable>(_ limit: Duration, _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: limit)
+                throw TimeoutError()
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else { throw TimeoutError() }
+            return first
+        }
+    }
+
     // MARK: Prompts (kept short: the on-device context window is small)
+
+    static let cuisineInstructions = """
+    You classify a recipe's cuisine from its title and ingredients. \
+    Pick one of the listed cuisines, or other when none clearly fits.
+    """
+
+    static let timeInstructions = """
+    You estimate how long a home cook really needs for a recipe. \
+    Times written in the steps are already counted; never count them again. \
+    Give only the minutes the recipe leaves out: prep (chopping, measuring) for the listed ingredients, \
+    and untimed work such as preheating the oven, boiling water, or cooking until golden or soft. \
+    Be realistic for a home cook, not optimistic.
+    """
+
+    static func cuisinePrompt(recipe: Recipe) -> String {
+        let names = recipe.ingredients.prefix(25).map(\.name).joined(separator: ", ")
+        return """
+        Recipe: \(recipe.title)
+        Ingredients: \(names)
+        """
+    }
+
+    static func timePrompt(recipe: Recipe, analysis: TimeAnalysis) -> String {
+        let names = recipe.ingredients.prefix(30).map(\.name).joined(separator: ", ")
+        let steps = recipe.steps.prefix(12).enumerated()
+            .map { "\($0.offset + 1). \(String($0.element.prefix(140)))" }.joined(separator: "\n")
+        let hints = analysis.hintLines
+        return """
+        Recipe: \(recipe.title)
+        Ingredients (\(recipe.ingredients.count)): \(names)
+        Steps:
+        \(steps)
+        Already timed in the steps:
+        \(hints.isEmpty ? "(nothing)" : hints.map { "- \($0)" }.joined(separator: "\n"))
+        """
+    }
+
 
     static let editInstructions = """
     You update a home cook's saved recipe after they cooked it. \

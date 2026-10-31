@@ -75,6 +75,9 @@ enum StubPages {
         """
     }
 
+    /// Wikibooks Kung Pao Chicken: no JSON-LD, no stated time, no cuisine.
+    static let kungPao = "https://example.test/kung-pao-chicken"
+
     /// Launch environment serving fixture HTML for the stub URLs.
     static func environment() -> [String: String] {
         let bundle = Bundle(for: BundleToken.self)
@@ -89,6 +92,7 @@ enum StubPages {
         let pages = [
             porkBelly: html("woksoflife-red-braised-pork-belly"),
             chowMein: html("recipetineats-chow-mein"),
+            kungPao: html("wikibooks-kung-pao-chicken"),
             notARecipe: "<html><head><title>Hello</title></head><body><p>No recipe here.</p></body></html>",
             twiceWine: """
             <html><head><script type="application/ld+json">
