@@ -14,6 +14,10 @@ public protocol RecipeAssistant: Sendable {
     /// Ingredients for a recipe whose amounts are only written inside its steps. Never changes
     /// the steps. A model's answer must go through `ModelIngredientLines` before it's returned.
     func extractIngredients(steps: [String], title: String) async throws -> [Ingredient]
+    /// The whole recipe (ingredients, steps, notes, servings) from a pasted write-up whose
+    /// amounts are only in its steps. `rules` is `StepStyleParser`'s parse of `text`. A model's
+    /// answer must go through `RecipeAssembly.merge`; the rules return `rules` unchanged.
+    func assembleRecipe(text: String, rules: Recipe) async throws -> Recipe
     /// The "Mise en place" list for cook mode. A model's plan must go through `PrepPlanner.map`.
     func planPrep(recipe: Recipe) async throws -> PrepPlan
     /// Rewrites of single steps after proposed `edits` (an added ingredient no step mentions, a
@@ -34,6 +38,10 @@ extension RecipeAssistant {
 
     public func extractIngredients(steps: [String], title: String) async throws -> [Ingredient] {
         IngredientCatalog.shared.annotate(Recipe(title: title, ingredients: StepIngredientExtractor.extract(from: steps))).ingredients
+    }
+
+    public func assembleRecipe(text: String, rules: Recipe) async throws -> Recipe {
+        rules
     }
 
     public func planPrep(recipe: Recipe) async throws -> PrepPlan {
