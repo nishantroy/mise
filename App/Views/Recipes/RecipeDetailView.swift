@@ -12,6 +12,7 @@ struct RecipeDetailView: View {
     @State private var servings: Int?
     @State private var showingCheck = false
     @State private var showingAdjust = false
+    @State private var showingMyVersion = false
     @State private var confirmReset = false
     @State private var confirmDelete = false
     @State private var rechecking = false
@@ -53,6 +54,7 @@ struct RecipeDetailView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
+                    Button("Paste my version", systemImage: "doc.on.clipboard") { showingMyVersion = true }
                     Button("Check ingredients", systemImage: "checklist") { showingCheck = true }
                     Button("Re-check time and cuisine", systemImage: "clock.arrow.circlepath") { recheck() }
                         .disabled(rechecking)
@@ -94,6 +96,14 @@ struct RecipeDetailView: View {
         .sheet(isPresented: $showingAdjust) {
             NavigationStack {
                 AdjustRecipeView(saved: saved)
+            }
+        }
+        .sheet(isPresented: $showingMyVersion) {
+            NavigationStack {
+                PasteMyVersionView(saved: saved) { showingMyVersion = false }
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showingMyVersion = false } }
+                    }
             }
         }
     }

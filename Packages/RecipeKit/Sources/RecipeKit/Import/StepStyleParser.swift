@@ -254,9 +254,10 @@ public enum ModelIngredientLines {
         return !words.isEmpty && words.allSatisfy { stepText.contains(" \($0) ") }
     }
 
-    /// The model's list when it's usable: at least two lines and at least half as many as the
-    /// rules found (a model that drops most ingredients is worse than the rules). Otherwise the rules.
+    /// The model's list when it's usable: at least two lines and at least ¾ as many as the rules
+    /// found (a model that drops ingredients is worse than the rules). Otherwise the rules.
     public static func choose(model: [Ingredient], rules: [Ingredient]) -> [Ingredient] {
-        model.count >= max(2, rules.count / 2) ? model : rules
+        let needed = max(2, Int((Double(rules.count) * 0.75).rounded(.up)))
+        return model.count >= needed ? model : rules
     }
 }

@@ -15,20 +15,13 @@ struct AdjustRecipeView: View {
     @State private var ratingTouched = false
     @State private var chips: Set<String> = []
     @State private var text = ""
-    @State private var proposals: [Proposal]?
+    @State private var proposals: [EditProposal]?
     /// The feedback the current proposals were made from.
     @State private var proposedFor = ""
     @State private var isThinking = false
     @State private var assistantName = ""
 
     static let quickChips = ["Too salty", "Too spicy", "Too bland", "Needed more time", "Perfect"]
-
-    struct Proposal: Identifiable {
-        let id = UUID()
-        let edit: RecipeEdit
-        let summary: String
-        var included = true
-    }
 
     private var feedback: String {
         let chipText = Self.quickChips.filter { chips.contains($0) && $0 != "Perfect" }
@@ -74,6 +67,17 @@ struct AdjustRecipeView: View {
                 if let proposals {
                     proposalsCard(proposals)
                 }
+
+                // Wrote up the version you actually made? Diff it against this recipe instead.
+                NavigationLink {
+                    PasteMyVersionView(saved: saved, markCooked: true) { dismiss() }
+                } label: {
+                    Label("Paste your own version instead", systemImage: "doc.on.clipboard")
+                        .font(Theme.Fonts.meta)
+                        .frame(minHeight: Theme.Size.minTap)
+                }
+                .tint(Color.mise.accent)
+                .accessibilityIdentifier("adjust.pasteMyVersion")
             }
             .padding(.horizontal, Theme.Spacing.gutter)
             .padding(.vertical, Theme.Spacing.m)
@@ -114,7 +118,7 @@ struct AdjustRecipeView: View {
         .accessibilityIdentifier(value > 0 ? "adjust.thumbsUp" : "adjust.thumbsDown")
     }
 
-    private func proposalsCard(_ list: [Proposal]) -> some View {
+    private func proposalsCard(_ list: [EditProposal]) -> some View {
         SectionCard(title: "Suggested changes") {
             if list.isEmpty {
                 Text("No changes to suggest. Your feedback will be saved as a note.")
@@ -122,12 +126,10 @@ struct AdjustRecipeView: View {
             } else {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     ForEach(Array(list.enumerated()), id: \.element.id) { index, proposal in
-                        Toggle(isOn: Binding(get: { proposals?[index].included ?? false },
-                                             set: { proposals?[index].included = $0 })) {
-                            Text(proposal.summary).foregroundStyle(Color.mise.ink)
-                        }
-                        .tint(Color.mise.accent)
-                        .accessibilityIdentifier("adjust.edit.\(index)")
+                        ProposalToggle(text: proposal.summary,
+                                       isOn: Binding(get: { proposals?[index].included ?? false },
+                                                     set: { proposals?[index].included = $0 }),
+                                       identifier: "adjust.edit.\(index)")
                     }
                     Text("Untick anything you don't want. Suggested by \(assistantName).")
                         .font(Theme.Fonts.caption)
@@ -158,7 +160,7 @@ struct AdjustRecipeView: View {
                 edits = (try? await rules.proposeEdits(recipe: recipe, feedback: feedback, prefs: prefs)) ?? []
                 name = rules.displayName
             }
-            proposals = edits.map { Proposal(edit: $0, summary: $0.summary(in: recipe)) }
+            proposals = edits.map { EditProposal(edit: $0, summary: $0.summary(in: recipe)) }
             proposedFor = feedback
             assistantName = name
             isThinking = false

@@ -58,6 +58,17 @@ extension SchemaV1 {
             updatedAt = now
         }
 
+        /// "Paste my version": applies the ticked edits, plus the user's title and servings when
+        /// they opted in, as one revision. `originalData` is untouched, so "Reset to original" works.
+        func applyVersion(_ edits: [RecipeEdit], title: String?, servings: Int?, summary: String, now: Date = Date()) {
+            var next = recipe.applying(edits)
+            if let title { next.title = title }
+            if let servings { next.servings = servings }
+            recipe = next
+            revisions.append(RecipeRevision(date: now, summary: summary, edits: edits))
+            updatedAt = now
+        }
+
         /// The user picked (or confirmed) a cuisine, or cleared a guessed one. A plain edit,
         /// recorded as a revision with no recipe edits (like "Reset to original").
         func setCuisine(_ cuisine: String?, now: Date = Date()) {

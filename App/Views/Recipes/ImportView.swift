@@ -6,6 +6,8 @@ struct ImportView: View {
     enum Mode: String, CaseIterable { case link = "Link", text = "Text" }
 
     var initialURL: URL?
+    /// Recipe text shared from another app; opens the Text tab with it.
+    var initialText: String?
     var onSaved: (SavedRecipe) -> Void
 
     @Environment(\.recipeFetcher) private var fetcher
@@ -68,6 +70,10 @@ struct ImportView: View {
         }
         .onAppear {
             if let initialURL, urlText.isEmpty { urlText = initialURL.absoluteString }
+            if let initialText, pastedText.isEmpty {
+                mode = .text
+                pastedText = initialText
+            }
         }
     }
 
@@ -106,7 +112,7 @@ struct ImportView: View {
                 .padding(Theme.Spacing.xs)
                 .background(Color.mise.surfaceSunken, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
                 .accessibilityIdentifier("import.text")
-            Text("Paste the title, an \"Ingredients\" list and a \"Method\" or \"Instructions\" list.")
+            Text("Paste the title, then an \"Ingredients\" list and a \"Method\", or just your steps with the amounts in them.")
                 .font(Theme.Fonts.caption)
                 .foregroundStyle(Color.mise.inkSecondary)
         }
@@ -136,13 +142,16 @@ struct ImportView: View {
         errorMessage = nil
         switch mode {
         case .text:
-            guard let recipe = RecipeImporter.parse(text: pastedText) else {
-                errorMessage = "Couldn't find a recipe in that text. Make sure it has an \"Ingredients\" heading and a \"Method\" or \"Instructions\" heading."
-                return
-            }
+            let text = pastedText
+            let assistant = provider.assistant
             isLoading = true
             Task {
                 defer { isLoading = false }
+                // Classic "Ingredients / Method" text, or steps with the amounts written in them.
+                guard let recipe = await PastedRecipes.parse(text, assistant: assistant) else {
+                    errorMessage = "Couldn't find a recipe in that text. Put amounts in the steps (\"1 tbsp soy sauce\"), or use an \"Ingredients\" heading and a \"Method\" heading."
+                    return
+                }
                 parsed = await withInsights(recipe)
             }
         case .link:

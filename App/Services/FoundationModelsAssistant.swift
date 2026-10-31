@@ -89,6 +89,12 @@ struct TimeGaps {
     var reason: String
 }
 
+@Generable(description: "The ingredients a recipe's steps mention, with their amounts.")
+struct IngredientExtraction {
+    @Guide(description: "One ingredient per line with its amount as the steps give it, e.g. \"1 tbsp soy sauce\" or \"a handful of cilantro\". Ingredients only, never instructions.", .maximumCount(40))
+    var lines: [String]
+}
+
 // MARK: - Assistant
 
 /// On-device model assistant. Uses the rules as hints and falls back to them silently on any error.
@@ -176,6 +182,44 @@ struct FoundationModelsAssistant: RecipeAssistant {
             Self.log.error("estimateTime fell back to rules: \(String(describing: error), privacy: .public)")
             return estimator.estimate(recipe)
         }
+    }
+
+    /// Ingredients for a recipe written as steps only. The model proposes lines; RecipeKit
+    /// (`ModelIngredientLines`) drops anything the steps don't mention and falls back to the
+    /// rules when the model's list is too thin. Steps are never changed. Errors → the rules.
+    func extractIngredients(steps: [String], title: String) async throws -> [Ingredient] {
+        let rules = try await RuleBasedAssistant().extractIngredients(steps: steps, title: title)
+        guard SystemLanguageModel.default.isAvailable else { return rules }
+        let prompt = Self.extractionPrompt(steps: steps, title: title)
+        do {
+            let plan = try await Self.withTimeout(Self.insightTimeout) {
+                let session = LanguageModelSession(instructions: Self.extractionInstructions)
+                return try await session.respond(to: prompt, generating: IngredientExtraction.self,
+                                                 options: GenerationOptions(temperature: 0)).content
+            }
+            Self.debugLog("extractIngredients", prompt: prompt, output: "\(plan)")
+            return ModelIngredientLines.choose(model: ModelIngredientLines.map(plan.lines, steps: steps), rules: rules)
+        } catch {
+            Self.log.error("extractIngredients fell back to rules: \(String(describing: error), privacy: .public)")
+            return rules
+        }
+    }
+
+    static let extractionInstructions = """
+    You list the ingredients of a home cook's recipe. The amounts are written inside the steps. \
+    Give each ingredient once, with its amount and unit exactly as the steps say. \
+    Put alternatives in the same line ("soy sauce or tamari"). Don't list equipment, times or temperatures, \
+    and never rewrite the steps.
+    """
+
+    static func extractionPrompt(steps: [String], title: String) -> String {
+        let text = steps.prefix(20).enumerated()
+            .map { "\($0.offset + 1). \(String($0.element.prefix(300)))" }.joined(separator: "\n")
+        return """
+        Recipe: \(title)
+        Steps:
+        \(text)
+        """
     }
 
     /// Import waits for these calls, so they get a deadline.
