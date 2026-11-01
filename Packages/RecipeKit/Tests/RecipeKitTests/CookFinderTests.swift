@@ -105,6 +105,17 @@ struct RecipeMatcherTests {
         try matcher.search(CookQueryParser().parse(text), in: candidates ?? fixtureCandidates(), pantry: pantry)
     }
 
+    /// The owner's saved beef recipe lost its beef line to an old paste parse; the title still
+    /// says "Ground Beef", so asking for beef must find it first.
+    @Test func ingredientNamedInTitleCounts() throws {
+        var beef = try #require(RecipeImporter.parse(html: Fixture.html("woksoflife-shortcut-mongolian-ground-beef"), url: nil))
+        beef.ingredients.removeAll { $0.catalogID == "beef" }
+        let pancakes = try #require(RecipeImporter.parse(html: Fixture.html("bbcgoodfood-easy-pancakes"), url: nil))
+        let r = try search("beef", candidates: [beef, pancakes].map { CookCandidate(id: UUID(), recipe: $0) })
+        #expect(r.status == .matched)
+        #expect(r.matches.map(\.title) == [beef.title])
+    }
+
     @Test func spicyGroundBeefUnderThirty() throws {
         let r = try search("something spicy with ground beef under 30 min")
         #expect(r.status == .matched)

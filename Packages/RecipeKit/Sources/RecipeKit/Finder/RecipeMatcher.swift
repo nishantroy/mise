@@ -193,10 +193,13 @@ public struct RecipeMatcher: Sendable {
             if let hit { failures.append(.contains(Self.tagName(hit, avoidTags: query.avoidTags))) }
         }
 
-        // Ingredients asked for.
+        // Ingredients asked for: in the list, or named in the title ("…Ground Beef" for "beef",
+        // even when a bad parse dropped it from the list).
+        let titleNorm = " \(IngredientCatalog.normalise(recipe.title)) "
         var used: [String] = []
         for want in query.ingredients
-        where resolved.contains(where: { Self.matches(query: want, ingredient: $0.ingredient, entry: $0.entry, catalog: catalog, avoiding: false) }) {
+        where resolved.contains(where: { Self.matches(query: want, ingredient: $0.ingredient, entry: $0.entry, catalog: catalog, avoiding: false) })
+            || titleNorm.contains(" \(IngredientCatalog.normalise(want.term)) ") {
             used.append(want.term)
             relevance += want.useUp ? Self.useUpWeight : Self.ingredientWeight
         }
