@@ -20,9 +20,13 @@ public struct TimeEstimate: Codable, Hashable, Sendable {
     public var passiveLabel: String?
     /// A step says "overnight" (counted as 8 hours of passive time).
     public var isOvernight: Bool
+    /// `TimeEstimate.basis(for:)` of the recipe this was computed from. Nil (estimates saved
+    /// before it existed) or different from the recipe's current basis means the estimate is
+    /// stale: the steps or ingredients changed since, or the rules did.
+    public var basis: String?
 
     public init(totalMinutes: Int, activeMinutes: Int, passiveMinutes: Int, reason: String, source: Source,
-                passiveLabel: String? = nil, isOvernight: Bool = false) {
+                passiveLabel: String? = nil, isOvernight: Bool = false, basis: String? = nil) {
         self.totalMinutes = totalMinutes
         self.activeMinutes = activeMinutes
         self.passiveMinutes = passiveMinutes
@@ -30,10 +34,11 @@ public struct TimeEstimate: Codable, Hashable, Sendable {
         self.source = source
         self.passiveLabel = passiveLabel
         self.isOvernight = isOvernight
+        self.basis = basis
     }
 
     enum CodingKeys: String, CodingKey {
-        case totalMinutes, activeMinutes, passiveMinutes, reason, source, passiveLabel, isOvernight
+        case totalMinutes, activeMinutes, passiveMinutes, reason, source, passiveLabel, isOvernight, basis
     }
 
     public init(from decoder: any Decoder) throws {
@@ -45,10 +50,63 @@ public struct TimeEstimate: Codable, Hashable, Sendable {
         source = (try? c.decodeIfPresent(Source.self, forKey: .source)) ?? .rules
         passiveLabel = try c.decodeIfPresent(String.self, forKey: .passiveLabel)
         isOvernight = try c.decodeIfPresent(Bool.self, forKey: .isOvernight) ?? false
+        basis = (try? c.decodeIfPresent(String.self, forKey: .basis)) ?? nil
+    }
+
+    /// What an estimate depends on: the steps, the ingredient names and the rules' version
+    /// (`TimeEstimator.rulesVersion`). Title, servings, quantities, notes and cuisine don't
+    /// change it. A stable 64-bit FNV-1a hash in hex (Swift's `Hasher` is seeded per launch).
+    public static func basis(for recipe: Recipe) -> String {
+        let text = "v\(TimeEstimator.rulesVersion)\n"
+            + recipe.ingredients.map { $0.name.lowercased() }.joined(separator: "\n")
+            + "\n--\n" + recipe.steps.joined(separator: "\n")
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return String(hash, radix: 16)
+    }
+
+    /// Computed from the recipe as it is now (same steps, ingredients and rules).
+    public func fits(_ recipe: Recipe) -> Bool {
+        basis == Self.basis(for: recipe)
+    }
+
+    /// The same estimate, marked as computed from `recipe`.
+    public func stamped(for recipe: Recipe) -> TimeEstimate {
+        var copy = self
+        copy.basis = Self.basis(for: recipe)
+        return copy
     }
 }
 
 extension Recipe {
+    /// The stored estimate when it fits the recipe as it is now; otherwise (stale) the rules'
+    /// estimate for the current steps. Nil when nothing is stored.
+    public func currentTimeEstimate(catalog: IngredientCatalog = .shared) -> TimeEstimate? {
+        guard let estimate = timeEstimate else { return nil }
+        return estimate.fits(self) ? estimate : TimeEstimator(catalog: catalog).estimate(self)
+    }
+
+    /// True when an estimate is stored but was computed from different steps/ingredients
+    /// (or older rules).
+    public var hasStaleTimeEstimate: Bool {
+        guard let estimate = timeEstimate else { return false }
+        return !estimate.fits(self)
+    }
+
+    /// The recipe with a stale estimate replaced by the rules' estimate for its current steps;
+    /// unchanged when the estimate fits or there is none. Applied wherever a recipe is saved, so
+    /// edits (Paste my version, I made this, adjust, reset to original, cook-mode swaps) never
+    /// keep an estimate computed from other steps.
+    public func refreshingStaleTimeEstimate(catalog: IngredientCatalog = .shared) -> Recipe {
+        guard hasStaleTimeEstimate else { return self }
+        var copy = self
+        copy.timeEstimate = TimeEstimator(catalog: catalog).estimate(self)
+        return copy
+    }
+
     /// True when the estimate exceeds the stated time by a meaningful margin
     /// (see `TimeEstimator.isMismatch`). False when either is missing.
     public var timeMismatch: Bool {

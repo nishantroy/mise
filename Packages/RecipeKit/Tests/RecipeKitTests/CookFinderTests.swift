@@ -119,8 +119,8 @@ struct RecipeMatcherTests {
     @Test func spicyGroundBeefUnderThirty() throws {
         let r = try search("something spicy with ground beef under 30 min")
         #expect(r.status == .matched)
-        // The owner's version is ~35 min, so only the shortcut recipe (stated 30; its overnight
-        // marinade is a make-ahead option) passes.
+        // The owner's version is ~35 min, so only the shortcut recipe (stated 30, estimated 30;
+        // its overnight marinade is a make-ahead option) passes.
         #expect(r.matches.map(\.title) == ["Shortcut Mongolian Ground Beef"])
         #expect(r.matches[0].why == "Uses ground beef · spicy · ~30 min · missing Shaoxing wine — dry sherry works +2 more")
     }
@@ -242,10 +242,15 @@ struct RecipeMatcherTests {
         #expect(r.matches.map(\.title) == ["Chow Mein (liked)", "Chow Mein"])
     }
 
-    @Test func overnightMakeAheadDoesNotCountWhenTimeIsStated() throws {
+    @Test func overnightMakeAheadDoesNotCount() throws {
         let shortcut = try #require(try fixtureCandidates().first { $0.recipe.title == "Shortcut Mongolian Ground Beef" })
-        #expect(TimeEstimator().estimate(shortcut.recipe).isOvernight)
+        #expect(!TimeEstimator().estimate(shortcut.recipe).isOvernight)
         #expect(matcher.realisticMinutes(shortcut.recipe) == 30)
+        // A stale stored estimate (computed from other steps) is ignored.
+        var stale = shortcut.recipe
+        stale.timeEstimate = TimeEstimate(totalMinutes: 635, activeMinutes: 153, passiveMinutes: 480, reason: "",
+                                          source: .model, isOvernight: true)
+        #expect(matcher.realisticMinutes(stale) == 30)
     }
 }
 

@@ -284,6 +284,8 @@ struct TimeEstimateTests {
         ("indianhealthyrecipes-chicken-curry", 50, 40, false),
         ("bbcgoodfood-easy-pancakes", 30, 40, false),
         ("woksoflife-red-braised-pork-belly", 105, 80, false),
+        // Was 505 (optional make-ahead overnight counted); its 20-min marinade overlaps 14 min of prep.
+        ("woksoflife-shortcut-mongolian-ground-beef", 30, 30, false),
     ] as [(String, Int?, Int, Bool)])
     func fixtureEstimates(_ name: String, _ stated: Int?, _ total: Int, _ mismatch: Bool) throws {
         let r = try fixture(name)
@@ -309,21 +311,155 @@ struct TimeEstimateTests {
         #expect(e.reason == "Chopping takes about 15 minutes and heating the wok 5.")
     }
 
-    @Test func modelGapsAreClamped() throws {
-        let absurd = try #require(TimeEstimator.clamp(TimeGapProposal(prepMinutes: 900, untimedMinutes: 5000,
-                                                                     reason: "Line one\nline two")))
-        #expect(absurd.prepMinutes == 60)
-        #expect(absurd.untimedMinutes == 120)
-        #expect(absurd.reason == "Line one")
-        let tiny = try #require(TimeEstimator.clamp(TimeGapProposal(prepMinutes: 0, untimedMinutes: 0, reason: "   ")))
-        #expect(tiny.prepMinutes == 2)
+    @Test func modelGapsAreBoundedByTheRules() throws {
+        // Kung Pao: the rules give 22 min prep and 3 min untimed, so the model may say
+        // prep 11–44 and untimed 0–18.
+        let a = TimeEstimator().analyse(try fixture("wikibooks-kung-pao-chicken"))
+        #expect(a.prepMinutes == 22 && a.untimedMinutes == 3)
+        func clamp(_ prep: Int, _ untimed: Int, _ reason: String = "Model words.") -> TimeGapProposal? {
+            TimeEstimator.clamp(TimeGapProposal(prepMinutes: prep, untimedMinutes: untimed, reason: reason), against: a)
+        }
+        let edges = try #require(clamp(11, 18, "Line one\nline two"))
+        #expect(edges.prepMinutes == 11 && edges.untimedMinutes == 18)
+        #expect(edges.reason == "Line one")
+        let upper = try #require(clamp(44, 0))
+        #expect(upper.prepMinutes == 44 && upper.untimedMinutes == 0)
+        // One part out of bounds: the rules' value for that part, and a neutral reason.
+        let halfAbsurd = try #require(clamp(45, 5))
+        #expect(halfAbsurd.prepMinutes == 22 && halfAbsurd.untimedMinutes == 5)
+        #expect(halfAbsurd.reason.hasPrefix("Includes about 22 min of prep"))
+        #expect(clamp(10, 3)?.prepMinutes == 22, "below half the rules' prep")
+        // Both out of bounds, or negative: unusable, the rules stand.
+        #expect(clamp(900, 5000) == nil)
+        #expect(clamp(-5, 10) == nil)
+        let tiny = try #require(clamp(11, 0, "   "))
         #expect(!tiny.reason.isEmpty, "empty reason gets a default")
-        #expect(TimeEstimator.clamp(TimeGapProposal(prepMinutes: -5, untimedMinutes: 10, reason: "x")) == nil)
-        let long = try #require(TimeEstimator.clamp(TimeGapProposal(prepMinutes: 10, untimedMinutes: 0, reason: String(repeating: "word ", count: 80))))
+        let long = try #require(clamp(20, 0, String(repeating: "word ", count: 80)))
         #expect(long.reason.count <= 160)
+        // Small recipes: the slack (+15) keeps room for the model, the 2-min floor holds.
+        let egg = TimeEstimator().analyse(recipe("x", ingredients: ["1 egg"], steps: ["Boil for 8 minutes."]))
+        #expect(TimeEstimator.clamp(TimeGapProposal(prepMinutes: 20, untimedMinutes: 15, reason: "x"), against: egg)?.prepMinutes == 20)
+        #expect(TimeEstimator.clamp(TimeGapProposal(prepMinutes: 1, untimedMinutes: 16, reason: "x"), against: egg) == nil)
         // An unusable proposal leaves the rules in charge.
         let r = recipe("x", ingredients: ["1 egg"], steps: ["Boil for 8 minutes."])
         #expect(TimeEstimator().estimate(r, gaps: TimeGapProposal(prepMinutes: -1, untimedMinutes: -1, reason: "")).source == .rules)
+    }
+
+    // MARK: Make-ahead overnight
+
+    @Test(arguments: [
+        "(Or if making ahead, cover and refrigerate overnight.)",
+        "Marinate for 30 minutes, or up to overnight.",
+        "The sauce can be made a day ahead and chilled overnight.",
+        "If making ahead, refrigerate overnight.",
+        "Chill overnight if you have time.",
+    ])
+    func optionalOvernightIsNotCounted(_ text: String) {
+        #expect(TimeEstimator.isOptionalOvernight(text), "\(text)")
+        #expect(TimeEstimator.durations(in: text).allSatisfy { !$0.overnight }, "\(text)")
+    }
+
+    @Test(arguments: [
+        "Cover and marinate for at least 4 hours or overnight.",
+        "Marinate overnight.",
+        "Refrigerate overnight.",
+        "Soak the beans overnight, then drain.",
+    ])
+    func requiredOvernightCounts(_ text: String) {
+        #expect(!TimeEstimator.isOptionalOvernight(text), "\(text)")
+        #expect(TimeEstimator.durations(in: text).first?.overnight == true, "\(text)")
+    }
+
+    @Test func upToOvernightKeepsTheStatedWait() {
+        #expect(TimeEstimator.durations(in: "Marinate for 30 minutes, or up to overnight.").map(\.minutes) == [30])
+    }
+
+    @Test func woksOfLifeShortcutIsNotOvernight() throws {
+        let r = try fixture("woksoflife-shortcut-mongolian-ground-beef")
+        let e = TimeEstimator().estimate(r)
+        #expect(!e.isOvernight)
+        // 14 prep + 3 timed + 8 untimed cooking, plus the 6 min of the 20-min marinade that
+        // outlasts the prep ("while you prep the other ingredients") → 31 → 30.
+        #expect(e.totalMinutes == 30, "\(e)")
+        #expect(e.passiveMinutes == 6)
+        #expect(e.passiveLabel == "marinating")
+        #expect(e.reason.contains("6 min more marinating after the prep"), "\(e.reason)")
+        #expect(RecipeMatcher().realisticMinutes(r) == 30)
+    }
+
+    @Test func genuineOvernightRecipeStillCounts() {
+        let r = recipe("Overnight char siu", ingredients: ["1 kg pork shoulder", "3 tbsp hoisin sauce", "2 tbsp honey"],
+                       steps: ["Coat the pork with the hoisin and honey, cover and refrigerate overnight.",
+                               "Roast for 45 minutes."], minutes: 60)
+        let e = TimeEstimator().estimate(r)
+        #expect(e.isOvernight)
+        #expect(e.passiveMinutes == 480)
+        #expect(e.totalMinutes == 530)  // 5 prep + 45 roasting + 480
+        #expect(RecipeMatcher().realisticMinutes(r) == 530, "a required overnight counts even with a stated time")
+    }
+
+    // MARK: The owner's Mongolian beef
+
+    /// The owner's 11-step version, with the estimate their phone had stored (computed from the
+    /// Woks of Life steps by the model, before estimates carried a basis).
+    static func ownersRecipe() throws -> Recipe {
+        var r = try #require(RecipeImporter.parse(text: Fixture.text("mongolian-beef-my-version")))
+        r.totalMinutes = 30
+        let stored = #"{"source":"model","totalMinutes":635,"activeMinutes":153,"passiveMinutes":480,"isOvernight":true,"passiveLabel":"chilling","reason":"Chopping and measuring spices and vegetables takes time, and cooking the beef and sauce requires significant time without timers."}"#
+        r.timeEstimate = try JSONDecoder().decode(TimeEstimate.self, from: Data(stored.utf8))
+        return r
+    }
+
+    @Test func ownersStoredEstimateIsStaleAndRefreshes() throws {
+        let r = try Self.ownersRecipe()
+        #expect(r.timeEstimate?.basis == nil)
+        #expect(r.hasStaleTimeEstimate)
+        let fresh = r.refreshingStaleTimeEstimate()
+        let e = try #require(fresh.timeEstimate)
+        #expect(!fresh.hasStaleTimeEstimate)
+        #expect(!e.isOvernight)
+        #expect(e.source == .rules)
+        // 17 prep + 16 timed cooking + 3 min "let it sit" → 36 → 35.
+        #expect(e.totalMinutes == 35, "\(e)")
+        #expect(r.currentTimeEstimate() == e)
+        #expect(RecipeMatcher().realisticMinutes(r) == 35)
+        // A fresh estimate is kept as is.
+        #expect(fresh.refreshingStaleTimeEstimate() == fresh)
+    }
+
+    @Test func modelCannotInventTimeForOwnersRecipe() throws {
+        let r = try Self.ownersRecipe()
+        let a = TimeEstimator().analyse(r)
+        #expect(a.prepMinutes == 17 && a.untimedMinutes == 0)
+        // The kind of answer that produced 153 active minutes: both parts far outside the
+        // rules' bounds (prep 8–34, untimed 0–15), so the rules' estimate stands.
+        let e = TimeEstimator().estimate(r, gaps: TimeGapProposal(prepMinutes: 60, untimedMinutes: 120, reason: "Chopping takes time."))
+        #expect(e.source == .rules)
+        #expect(e.totalMinutes == 35)
+        #expect(e.activeMinutes == 33)
+        // A refinement within bounds is used.
+        let refined = TimeEstimator().estimate(r, gaps: TimeGapProposal(prepMinutes: 20, untimedMinutes: 2, reason: "Slicing the vegetables takes a while."))
+        #expect(refined.source == .model)
+        #expect(refined.totalMinutes == 40)  // 20 + 16 + 2 + 3 = 41
+    }
+
+    @Test func basisTracksStepsAndIngredients() throws {
+        let r = try Self.ownersRecipe()
+        let e = TimeEstimator().estimate(r)
+        #expect(e.fits(r))
+        var renamed = r
+        renamed.title = "Weeknight beef"
+        renamed.servings = 8
+        #expect(e.fits(renamed), "title and servings don't affect the estimate")
+        var edited = r
+        edited.steps[5] = "Cook the onion and bell pepper for 10 min."
+        #expect(!e.fits(edited))
+        var swapped = r
+        swapped.ingredients[0].name = "shallot"
+        #expect(!e.fits(swapped))
+        // Round-trips through JSON.
+        let decoded = try JSONDecoder().decode(TimeEstimate.self, from: JSONEncoder().encode(e))
+        #expect(decoded.basis == e.basis && decoded.fits(r))
     }
 
     @Test func hintsListDurations() throws {
@@ -419,5 +555,27 @@ struct RecipeInsightsTests {
         #expect(!out.cuisineIsGuess, "the page gave Chinese")
         #expect(out.timeEstimate?.totalMinutes == 30)
         #expect(out.timeMismatch)
+        #expect(out.timeEstimate?.fits(out) == true)
+    }
+
+    /// An assistant that builds its own estimate without a basis.
+    struct FixedAssistant: RecipeAssistant {
+        var displayName: String { "Fixed" }
+        func proposeEdits(recipe: Recipe, feedback: String, prefs: UserPreferences) async throws -> [RecipeEdit] { [] }
+        func suggestSwaps(for ingredient: Ingredient, in recipe: Recipe, pantry: PantrySnapshot, prefs: UserPreferences) async throws -> [SwapSuggestion] { [] }
+        func estimateTime(recipe: Recipe) async throws -> TimeEstimate {
+            TimeEstimate(totalMinutes: 42, activeMinutes: 42, passiveMinutes: 0, reason: "Fixed.", source: .model)
+        }
+    }
+
+    @Test func enrichStampsTheEstimateWithItsRecipe() async throws {
+        let r = try fixture("recipetineats-chow-mein")
+        let out = await RecipeInsights.enrich(r, using: FixedAssistant())
+        #expect(out.timeEstimate?.totalMinutes == 42)
+        #expect(!out.hasStaleTimeEstimate)
+        var edited = out
+        edited.steps.append("Garnish with sesame seeds.")
+        #expect(edited.hasStaleTimeEstimate)
+        #expect(edited.refreshingStaleTimeEstimate().timeEstimate?.source == .rules)
     }
 }

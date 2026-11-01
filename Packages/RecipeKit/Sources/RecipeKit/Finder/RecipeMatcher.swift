@@ -260,13 +260,13 @@ public struct RecipeMatcher: Sendable {
     }
 
     /// The longer of the stated time and Mise's estimate (computed by the rules when the recipe
-    /// has none stored). An overnight wait counts only when the recipe states no time: overnight
-    /// is usually an optional make-ahead ("or refrigerate overnight").
+    /// has none stored, or a stale one). Optional make-ahead overnights ("or refrigerate
+    /// overnight") are already left out by `TimeEstimator`.
     public func realisticMinutes(_ recipe: Recipe) -> Int? {
-        let estimate = recipe.timeEstimate ?? (recipe.steps.isEmpty ? nil : TimeEstimator(catalog: catalog).estimate(recipe))
+        let estimate = recipe.currentTimeEstimate(catalog: catalog)
+            ?? (recipe.steps.isEmpty ? nil : TimeEstimator(catalog: catalog).estimate(recipe))
         let stated = recipe.totalMinutes.flatMap { $0 > 0 ? $0 : nil }
         guard let estimate else { return stated }
-        if estimate.isOvernight, let stated { return max(stated, estimate.activeMinutes) }
         return max(stated ?? 0, estimate.totalMinutes)
     }
 

@@ -19,9 +19,12 @@ public enum RecipeInsights {
         }
     }
 
-    static func estimateTime(_ recipe: Recipe, using assistant: any RecipeAssistant, catalog: IngredientCatalog) async -> TimeEstimate {
+    /// The assistant's estimate, marked as computed from `recipe` (so it goes stale when the
+    /// steps or ingredients change). Errors fall back to the rules.
+    public static func estimateTime(_ recipe: Recipe, using assistant: any RecipeAssistant,
+                                    catalog: IngredientCatalog = .shared) async -> TimeEstimate {
         do {
-            return try await assistant.estimateTime(recipe: recipe)
+            return try await assistant.estimateTime(recipe: recipe).stamped(for: recipe)
         } catch {
             return TimeEstimator(catalog: catalog).estimate(recipe)
         }

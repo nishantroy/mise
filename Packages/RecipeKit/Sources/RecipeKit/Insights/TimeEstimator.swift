@@ -12,6 +12,9 @@ public struct StepDuration: Hashable, Sendable {
     public var isParallel: Bool
     /// The matched text, e.g. "2–3 minutes".
     public var text: String
+    /// A parallel wait done "while you prep the other ingredients": it overlaps the prep, so
+    /// only the part longer than the prep is added (`TimeAnalysis.prepOverlapWaitMinutes`).
+    public var overlapsPrep: Bool = false
 
     public var isPassive: Bool { passiveLabel != nil }
 }
@@ -35,6 +38,10 @@ public struct TimeAnalysis: Hashable, Sendable {
     public var activeCookingMinutes: Double { durations.filter { !$0.isParallel && !$0.isPassive }.reduce(0) { $0 + $1.minutes } }
     public var passiveMinutes: Double { durations.filter { !$0.isParallel && $0.isPassive }.reduce(0) { $0 + $1.minutes } }
     public var isOvernight: Bool { durations.contains { $0.isOvernight && !$0.isParallel } }
+    /// The longest wait done while prepping ("marinate for 20 minutes while you prep the other
+    /// ingredients"); the estimate adds whatever of it the prep doesn't cover.
+    public var prepOverlapWaitMinutes: Double { durations.filter(\.overlapsPrep).map(\.minutes).max() ?? 0 }
+    public var prepOverlapWaitLabel: String? { durations.filter(\.overlapsPrep).max { $0.minutes < $1.minutes }?.passiveLabel }
 
     /// "marinating" when one kind is at least 75% of the passive time, otherwise "waiting".
     public var passiveLabel: String? {
@@ -83,8 +90,12 @@ public struct TimeGapProposal: Hashable, Sendable {
 ///   Storage advice ("freeze for up to two months") is ignored.
 /// - Each is passive when its clause says marinate, rest, chill, refrigerate, rise, proof, soak,
 ///   set (aside), cool, stand or freeze; otherwise active (simmering and baking count as active).
+/// - An optional make-ahead overnight ("(Or if making ahead, refrigerate overnight.)", "can be made
+///   a day ahead", "or up to overnight") is not counted (`isOptionalOvernight`).
 /// - Clauses starting "Meanwhile" / "While …" or containing "while the X …" are assumed to overlap
-///   with the step before and aren't added.
+///   with the step before and aren't added. A wait "while you prep the other ingredients" overlaps
+///   the prep: only the part longer than the prep is added.
+/// - Model gaps (`clamp(_:against:)`) must stay near the rules' own prep/untimed values.
 /// - Untimed work gets small defaults: an "until golden" cooking step with no time anywhere in the
 ///   step gets 3 min; "bring to a boil" with no time in its sentence gets 5 min.
 /// - Prep allowance: 1 min per ingredient (water, salt and pepper excluded), at least 5, at most 25.
@@ -99,6 +110,16 @@ public struct TimeEstimator: Sendable {
     public static let untilDefaultMinutes = 3.0
     public static let boilDefaultMinutes = 5.0
     public static let overnightMinutes = 480.0
+    /// Part of every estimate's `basis`: bump it when the rules change so stored estimates are
+    /// recomputed. 2: optional make-ahead overnight notes, waits overlapping prep, model bounds.
+    public static let rulesVersion = 2
+    /// Model bounds: the model's prep and untimed minutes must be within
+    /// [rules × `modelLowerFactor` (prep only), max(rules × `modelUpperFactor`, rules + `modelUpperSlack`)].
+    /// A part outside its bounds is replaced by the rules' own value: the model may refine the
+    /// rules' guess for work the recipe doesn't time, but not invent an hour of it.
+    public static let modelLowerFactor = 0.5
+    public static let modelUpperFactor = 2.0
+    public static let modelUpperSlack = 15.0
     /// Mismatch: the estimate is at least this many times the stated time…
     public static let mismatchRatio = 1.5
     /// …and at least this many minutes longer.
@@ -118,30 +139,52 @@ public struct TimeEstimator: Sendable {
         var untimed = analysis.untimedMinutes
         var source = TimeEstimate.Source.rules
         var modelReason: String?
-        if let gaps, let mapped = Self.clamp(gaps) {
+        if let gaps, let mapped = Self.clamp(gaps, against: analysis) {
             prep = Double(mapped.prepMinutes)
             untimed = Double(mapped.untimedMinutes)
             modelReason = mapped.reason
             source = .model
         }
         let active = prep + analysis.activeCookingMinutes + untimed
-        let passive = analysis.passiveMinutes
+        // A wait done "while you prep" lasts at least its own length: only the part longer than
+        // the prep adds to the total.
+        let prepWait = max(0, analysis.prepOverlapWaitMinutes - prep)
+        let passive = analysis.passiveMinutes + prepWait
         let total = max(5, Int((active + passive) / 5 + 0.5) * 5)
-        let reason = modelReason ?? Self.rulesReason(analysis)
+        let reason = modelReason ?? Self.rulesReason(analysis, prepWait: prepWait)
+        let label = analysis.passiveLabel ?? (prepWait > 0 ? analysis.prepOverlapWaitLabel : nil)
         return TimeEstimate(totalMinutes: total, activeMinutes: Int(active.rounded(.up)),
                             passiveMinutes: Int(passive.rounded(.up)), reason: reason, source: source,
-                            passiveLabel: analysis.passiveLabel, isOvernight: analysis.isOvernight)
+                            passiveLabel: label, isOvernight: analysis.isOvernight,
+                            basis: TimeEstimate.basis(for: recipe))
     }
 
-    /// Model output with absurd values clamped (prep 2–60 min, untimed 0–120 min) and the reason
-    /// cut to one line. Nil when the proposal is unusable (negative numbers).
-    public static func clamp(_ gaps: TimeGapProposal) -> TimeGapProposal? {
+    /// The model's prep or untimed minutes, or nil when outside the bounds around the rules'
+    /// value (see `modelLowerFactor`); the lower prep bound is at least 2 min.
+    static func bounded(_ proposed: Int, rules: Double, hasLowerBound: Bool) -> Int? {
+        let lower = hasLowerBound ? max(2, (rules * modelLowerFactor).rounded(.down)) : 0
+        let upper = max(rules * modelUpperFactor, rules + modelUpperSlack)
+        let value = Double(proposed)
+        return value >= lower && value <= upper ? proposed : nil
+    }
+
+    /// Model output checked against the rules' analysis: each part outside its bounds (see
+    /// `modelLowerFactor`) is replaced by the rules' value, and the reason is cut to one line.
+    /// Nil when the proposal is unusable (negative numbers) or both parts were out of bounds,
+    /// so the rules' estimate and reason stand.
+    public static func clamp(_ gaps: TimeGapProposal, against analysis: TimeAnalysis) -> TimeGapProposal? {
         guard gaps.prepMinutes >= 0, gaps.untimedMinutes >= 0 else { return nil }
-        let prep = min(max(gaps.prepMinutes, 2), 60)
-        let untimed = min(gaps.untimedMinutes, 120)
+        let modelPrep = bounded(gaps.prepMinutes, rules: analysis.prepMinutes, hasLowerBound: true)
+        let modelUntimed = bounded(gaps.untimedMinutes, rules: analysis.untimedMinutes, hasLowerBound: false)
+        guard modelPrep != nil || modelUntimed != nil else { return nil }
+        let prep = modelPrep ?? Int(analysis.prepMinutes.rounded(.up))
+        let untimed = modelUntimed ?? Int(analysis.untimedMinutes.rounded(.up))
         var reason = gaps.reason.split(whereSeparator: \.isNewline).first.map(String.init)?.collapsedWhitespace ?? ""
         if reason.count > 160 { reason = String(reason.prefix(157)).trimmed + "…" }
-        if reason.isEmpty { reason = "Includes about \(prep) min of prep and \(untimed) min of untimed cooking." }
+        if reason.isEmpty || modelPrep == nil || modelUntimed == nil {
+            // The model's words may describe the part that was rejected.
+            reason = "Includes about \(prep) min of prep and \(untimed) min of untimed cooking."
+        }
         return TimeGapProposal(prepMinutes: prep, untimedMinutes: untimed, reason: reason)
     }
 
@@ -151,7 +194,7 @@ public struct TimeEstimator: Sendable {
         return Double(estimate) >= mismatchRatio * Double(stated) && estimate - stated >= mismatchMinimumMinutes
     }
 
-    static func rulesReason(_ a: TimeAnalysis) -> String {
+    static func rulesReason(_ a: TimeAnalysis, prepWait: Double = 0) -> String {
         var parts = ["about \(format(a.prepMinutes)) to prep \(a.prepIngredientCount) ingredient\(a.prepIngredientCount == 1 ? "" : "s")"]
         let cooking = a.activeCookingMinutes + a.untimedMinutes
         if cooking > 0 {
@@ -165,6 +208,9 @@ public struct TimeEstimator: Sendable {
             parts.append("an overnight wait")
         } else if a.passiveMinutes > 0 {
             parts.append("\(format(a.passiveMinutes)) \(a.passiveLabel ?? "waiting")")
+        }
+        if prepWait > 0 {
+            parts.append("\(format(prepWait)) more \(a.prepOverlapWaitLabel ?? "waiting") after the prep")
         }
         let joined: String
         if parts.count <= 2 {
@@ -203,10 +249,12 @@ public struct TimeEstimator: Sendable {
                     let found = Self.durations(in: clause)
                     if !found.isEmpty { sentenceHasTime = true }
                     let label = Self.passiveLabel(clause)
+                    let duringPrep = parallel && label != nil && Self.overlapsPrep(clause)
                     for f in found {
                         stepDurations.append(StepDuration(step: index, minutes: f.minutes,
                                                           passiveLabel: f.overnight ? (label ?? "overnight") : label,
-                                                          isOvernight: f.overnight, isParallel: parallel, text: f.text))
+                                                          isOvernight: f.overnight, isParallel: parallel, text: f.text,
+                                                          overlapsPrep: duringPrep && !f.overnight))
                     }
                 }
                 if !sentenceHasTime && !stepParallel {
@@ -246,6 +294,20 @@ public struct TimeEstimator: Sendable {
 
     static func mentionsWhile(_ text: String) -> Bool {
         Rx.test("\\bwhile (?:the|it|they|that|this|you|your)\\b", text)
+    }
+
+    /// "while you prep the other ingredients", "while you chop the vegetables".
+    static func overlapsPrep(_ text: String) -> Bool {
+        Rx.test("\\bwhile you(?:'re| are)? (?:prep|prepare|chop|slice|measure|get|gather|make)\\w*", text)
+    }
+
+    /// An "overnight" that is a make-ahead option, not a required wait: "(Or if making ahead,
+    /// cover and refrigerate overnight.)", "can be made a day ahead", "marinate 30 minutes or up
+    /// to overnight". "Marinate overnight" and "at least 4 hours or overnight" are required.
+    public static func isOptionalOvernight(_ text: String) -> Bool {
+        Rx.test("^\\W*or\\b", text)
+            || Rx.test("\\bif (?:you(?:'re| are) )?making (?:\\w+ )?(?:ahead|in advance)\\b|\\bmake[- ]ahead\\b|\\bmade (?:\\w+ ){0,3}(?:ahead|in advance)\\b|\\b(?:a|one) day ahead\\b|\\bday before\\b|\\bahead of time\\b|\\bin advance\\b", text)
+            || Rx.test("\\bup to overnight\\b|\\bif you have (?:the )?time\\b|\\bif time allows\\b", text)
     }
 
     static func isStorageAdvice(_ text: String) -> Bool {
@@ -362,8 +424,9 @@ public struct TimeEstimator: Sendable {
             out.append((item.minutes, false, ns.substring(with: item.range)))
             i += 1
         }
-        if Rx.test("\\bovernight\\b", text) {
+        if Rx.test("\\bovernight\\b", text) && !isOptionalOvernight(text) {
             // "4 hours or overnight": overnight wins; other waits in the same clause are dropped.
+            // An optional make-ahead overnight ("or up to overnight") keeps the stated wait instead.
             out = [(overnightMinutes, true, "overnight")]
         }
         return out
