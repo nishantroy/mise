@@ -4,7 +4,7 @@ import RecipeKit
 /// Full-screen cook mode: the prep list first, then one step per page with "For this step"
 /// ingredients and tap-to-start timers. Keeps the screen awake while open.
 ///
-/// "Out of something?" swaps or skips an ingredient for this cook only (`CookSwap`): the working
+/// "Missing an ingredient?" swaps or skips an ingredient for this cook only (`CookSwap`): the working
 /// recipe's amounts, step text, prep list and "For this step" follow, and "I made this" offers
 /// each swap unticked. The session (page, ticks, swaps, timers) is saved as it changes, so
 /// closing cook mode or the app being killed can be resumed from the recipe.
@@ -162,7 +162,6 @@ struct CookModeView: View {
                         .accessibilityIdentifier("cook.pageTitle")
                 }
                 Spacer(minLength: 0)
-                outOfButton
             }
             ProgressView(value: Double(page), total: Double(max(lastPage, 1)))
                 .tint(Color.mise.accent)
@@ -172,26 +171,22 @@ struct CookModeView: View {
         .padding(.bottom, Theme.Spacing.xs)
     }
 
-    /// "Out of something?": a quiet capsule in the header, on every page; shorter, then
-    /// icon-only, when the text doesn't fit.
+    /// "Missing an ingredient?": a plain text link under the step's ingredients (and on the prep
+    /// page), always spelled out; an icon alone didn't say what it does.
     private var outOfButton: some View {
         Button { showingOutOf = true } label: {
-            ViewThatFits(in: .horizontal) {
-                Label("Out of something?", systemImage: "arrow.triangle.2.circlepath").lineLimit(1)
-                Label("Out of…", systemImage: "arrow.triangle.2.circlepath").lineLimit(1)
-                Image(systemName: "arrow.triangle.2.circlepath")
+            HStack(spacing: Theme.Spacing.xxs) {
+                Text("Missing an ingredient?")
+                Image(systemName: "chevron.right").font(Theme.Fonts.caption.weight(.semibold))
             }
             .font(Theme.Fonts.meta.weight(.semibold))
-            .padding(.horizontal, Theme.Spacing.s)
-            .frame(minWidth: Theme.Size.minTap, minHeight: Theme.Size.minTap)
             .foregroundStyle(Color.mise.accent)
-            .background(Color.mise.surfaceSunken, in: Capsule())
-            .contentShape(Capsule())
+            .frame(minHeight: Theme.Size.minTap)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .layoutPriority(-1)
-        .accessibilityLabel("Out of something?")
-        .accessibilityHint("Swap or skip a missing ingredient for this cook")
+        .accessibilityLabel("Missing an ingredient?")
+        .accessibilityHint("Swap or skip it for this cook")
         .accessibilityIdentifier("cook.outOf")
     }
 
@@ -246,6 +241,7 @@ struct CookModeView: View {
                     Text("For \(servings) \(servings == 1 ? "serving" : "servings"). Tick things off as you go.")
                         .font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
                 }
+                outOfButton
             }
             if !swaps.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
@@ -340,6 +336,7 @@ struct CookModeView: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("cook.forThisStep")
             }
+            outOfButton
         }
     }
 
