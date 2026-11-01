@@ -77,6 +77,10 @@ struct RecipeDetailView: View {
                          }, onClose: { showingCook = false })
         }
         .onAppear { loadSession() }
+        // After an edit (or the launch sweep) the estimate is the rules'; let the model refine it.
+        .task(id: saved.recipe.timeEstimate?.basis) {
+            await EstimateRefresh.refine(saved, provider: provider, context: context)
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

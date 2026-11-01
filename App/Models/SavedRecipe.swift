@@ -26,19 +26,50 @@ extension SchemaV1 {
             createdAt = now
             updatedAt = now
             title = current.title
-            recipeData = ModelCoding.encode(current)
-            originalData = ModelCoding.encode(original)
+            recipeData = ModelCoding.encode(current.refreshingStaleTimeEstimate())
+            originalData = ModelCoding.encode(original.refreshingStaleTimeEstimate())
             revisionsData = ModelCoding.encode(revisions)
             rating = nil
             timesCooked = 0
         }
 
+        /// Every write of the current version goes through here, so a time estimate computed from
+        /// other steps (an edit, Paste my version, reset to original, cook-mode swaps…) is replaced
+        /// by the rules' estimate for the new steps. `RecipeDetailView` then refines it with the
+        /// model in the background.
         var recipe: Recipe {
             get { ModelCoding.decode(Recipe.self, from: recipeData) ?? Recipe(title: title) }
             set {
-                recipeData = ModelCoding.encode(newValue)
+                recipeData = ModelCoding.encode(newValue.refreshingStaleTimeEstimate())
                 title = newValue.title
             }
+        }
+
+        /// Replaces stale estimates (computed from other steps, or before estimates recorded what
+        /// they were computed from) on the current and original versions with the rules'.
+        /// True when anything changed. Not a revision and doesn't bump `updatedAt`.
+        @discardableResult
+        func refreshStaleEstimates() -> Bool {
+            var changed = false
+            let current = recipe
+            if current.hasStaleTimeEstimate {
+                recipe = current
+                changed = true
+            }
+            if let base = ModelCoding.decode(Recipe.self, from: originalData), base.hasStaleTimeEstimate {
+                originalData = ModelCoding.encode(base.refreshingStaleTimeEstimate())
+                changed = true
+            }
+            return changed
+        }
+
+        /// Stores a model-refined estimate for the current version, if it still fits (the recipe
+        /// may have been edited while the model was thinking).
+        func refineEstimate(_ estimate: TimeEstimate) {
+            var current = recipe
+            guard estimate.fits(current), current.timeEstimate != estimate else { return }
+            current.timeEstimate = estimate
+            recipe = current
         }
 
         var original: Recipe {
@@ -84,11 +115,14 @@ extension SchemaV1 {
 
         /// Writes a re-checked cuisine guess and time estimate onto the current and original
         /// versions (so "Reset to original" keeps them). A page or user cuisine is never replaced.
-        /// Not a revision: it's metadata, not a change to the recipe.
+        /// Not a revision: it's metadata, not a change to the recipe. The estimate is computed
+        /// from the current steps, so the original (when its steps differ) gets the rules' estimate
+        /// for its own steps instead.
         func updateInsights(cuisineGuess: String?, estimate: TimeEstimate?) {
             let base = original
             recipe = recipe.withInsights(cuisineGuess: cuisineGuess, estimate: estimate)
-            originalData = ModelCoding.encode(base.withInsights(cuisineGuess: cuisineGuess, estimate: estimate))
+            originalData = ModelCoding.encode(base.withInsights(cuisineGuess: cuisineGuess, estimate: estimate)
+                .refreshingStaleTimeEstimate())
         }
 
         /// Restores the imported version, recorded as a revision so history is kept.
@@ -97,5 +131,44 @@ extension SchemaV1 {
             revisions.append(RecipeRevision(date: now, summary: "Reset to original", edits: []))
             updatedAt = now
         }
+    }
+}
+
+/// Keeps stored time estimates in step with the recipes they describe.
+@MainActor
+enum EstimateRefresh {
+    private static var sweptThisLaunch = false
+    /// "<recipe id>|<basis>" pairs the model has been asked to refine this launch, so a slow or
+    /// failing model isn't retried on every visit.
+    private static var refineAttempts: Set<String> = []
+
+    /// Once per launch: replaces every stale estimate (saved before estimates recorded what they
+    /// were computed from, or before the rules changed) with the rules' estimate for the
+    /// recipe's current steps. Rules only, so it's quick.
+    static func sweep(_ context: ModelContext) {
+        guard !sweptThisLaunch else { return }
+        sweptThisLaunch = true
+        let all = (try? context.fetch(FetchDescriptor<SavedRecipe>())) ?? []
+        var changed = false
+        for saved in all where saved.refreshStaleEstimates() { changed = true }
+        if changed { try? context.save() }
+    }
+
+    /// Asks the model to refine a rules estimate (one recomputed after an edit or by `sweep`),
+    /// at most once per recipe version per launch. Writes only if the recipe hasn't changed meanwhile.
+    static func refine(_ saved: SavedRecipe, provider: AssistantProvider, context: ModelContext) async {
+        let current = saved.recipe
+        guard provider.usesModel, let estimate = current.timeEstimate, estimate.source == .rules,
+              let basis = estimate.basis else { return }
+        let key = "\(saved.id)|\(basis)"
+        guard refineAttempts.insert(key).inserted else { return }
+        let refined = await RecipeInsights.estimateTime(current, using: provider.assistant)
+        if Task.isCancelled {
+            refineAttempts.remove(key)
+            return
+        }
+        guard refined.source == .model else { return }
+        saved.refineEstimate(refined)
+        try? context.save()
     }
 }

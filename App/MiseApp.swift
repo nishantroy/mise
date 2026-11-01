@@ -52,6 +52,7 @@ struct MainTabView: View {
     @Environment(AppRouter.self) private var router
     @Environment(AssistantProvider.self) private var provider
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.modelContext) private var context
 
     var body: some View {
         @Bindable var router = router
@@ -63,6 +64,8 @@ struct MainTabView: View {
         .onChange(of: scenePhase, initial: true) { _, phase in
             guard phase == .active else { return }
             provider.refresh()
+            // Once per launch: estimates computed from older steps or rules → the rules' for now.
+            EstimateRefresh.sweep(context)
             // Pick up links and text shared from other apps. Each stays in the App Group queue
             // until its sheet closes, so nothing is lost if the app is killed mid-import.
             router.onSharedImportFinished = { PendingImports.remove($0) }
