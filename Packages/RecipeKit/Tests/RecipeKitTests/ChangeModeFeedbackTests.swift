@@ -74,6 +74,18 @@ struct ChangeModeFeedbackTests {
         }
     }
 
+    @Test func severalStatementsInOneSentence() throws {
+        let recipe = try StepFixtures.pepperChicken()
+        let analysis = FeedbackParser(kind: .change).analyse(
+            "used 2 tbsp oil, the chicken only needs 10 minutes and it doesn't need the dry-out step", recipe: recipe)
+        #expect(analysis.edits.map { $0.summary(in: recipe) } == [
+            "Change oil: 2 ½ tbsp → 2 tbsp",
+            Self.pepperStep7 + "Cover and cook on low 10 min until tender. No water needed.",
+            "Remove step 8 (Dry out)",
+        ])
+        #expect(analysis.unresolved.isEmpty)
+    }
+
     @Test func aNoteAndAChangeInOneGo() throws {
         let recipe = try StepFixtures.pepperChicken()
         let analysis = FeedbackParser(kind: .change).analyse("used 2 tbsp oil. Note: serve with roti", recipe: recipe)
