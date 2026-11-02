@@ -12,6 +12,8 @@ struct RecipeDetailView: View {
     @State private var servings: Int?
     @State private var showingCheck = false
     @State private var showingAdjust = false
+    /// "Change recipe": describe changes in words without logging a cook.
+    @State private var showingChange = false
     @State private var showingCook = false
     /// Cook mode ended with "Done", so "I made this" opens once it has closed.
     @State private var cookFinished = false
@@ -46,6 +48,13 @@ struct RecipeDetailView: View {
                 if recipe.servings != nil { servingsCard }
                 ingredientsCard
                 stepsCard
+                // Below the recipe it changes; the bottom bar stays "Start cooking" / "I made this".
+                Button { showingChange = true } label: {
+                    Label("Change recipe", systemImage: "pencil.line")
+                }
+                .buttonStyle(.miseSecondaryWide)
+                .accessibilityHint("Describe changes in your own words, without logging a cook")
+                .accessibilityIdentifier("detail.changeRecipe")
                 if !recipe.notes.isEmpty { notesCard }
                 if !saved.cookLog.isEmpty { CookedSection(saved: saved) }
                 historyCard
@@ -88,6 +97,8 @@ struct RecipeDetailView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
+                    Button("Change recipe", systemImage: "pencil.line") { showingChange = true }
+                        .accessibilityIdentifier("detail.menu.changeRecipe")
                     Button("Paste my version", systemImage: "doc.on.clipboard") { showingMyVersion = true }
                     if session != nil {
                         Button("I made this", systemImage: "checkmark.circle") {
@@ -141,6 +152,11 @@ struct RecipeDetailView: View {
                     CookSessionStore.clear(saved.id)
                     session = nil
                 }
+            }
+        }
+        .sheet(isPresented: $showingChange) {
+            NavigationStack {
+                AdjustRecipeView(saved: saved, mode: .change)
             }
         }
         .sheet(isPresented: $showingMyVersion) {

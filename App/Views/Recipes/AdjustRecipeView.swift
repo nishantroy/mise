@@ -3,9 +3,20 @@ import SwiftData
 import RecipeKit
 
 /// "I made this": rating, quick chips, free-text feedback, and assistant-proposed edits
-/// the user can untick before saving.
+/// the user can untick before saving. In `.change` mode ("Change recipe") it is only the text
+/// and the proposals: no rating, photo or cook-mode swaps, and saving doesn't log a cook.
 struct AdjustRecipeView: View {
+    enum Mode {
+        /// "I made this": a report of a cook, logged with the revision.
+        case cooked
+        /// "Change recipe": instructions for the saved recipe; nothing is logged.
+        case change
+
+        var feedbackKind: FeedbackKind { self == .cooked ? .cooked : .change }
+    }
+
     let saved: SavedRecipe
+    var mode: Mode = .cooked
     /// Swaps made in cook mode ("I'm out of X"), offered unticked so the recipe only changes
     /// if the cook chooses.
     var sessionSwaps: [CookSwap] = []
@@ -34,6 +45,8 @@ struct AdjustRecipeView: View {
     @State private var keptSwaps: [KeptSwap] = []
     /// Downscaled in memory; written with the log entry on save.
     @State private var photo: ProcessedCookPhoto?
+    /// "make it serve 6": not a saved change, so the proposals say where servings are set.
+    @State private var servingsAsked: Int?
 
     /// A cook-mode swap and the edits that would keep it in the saved recipe.
     struct KeptSwap: Identifiable {
@@ -45,6 +58,11 @@ struct AdjustRecipeView: View {
 
     static let quickChips = ["Too salty", "Too spicy", "Too bland", "Needed more time", "Perfect"]
 
+    /// Examples under the "Change recipe" field.
+    static let changeExamples = ["use 2 tbsp oil", "cook the chicken 10 min on high", "no green chillies", "skip the dry-out step", "it's usually too salty"]
+
+    private var isCooked: Bool { mode == .cooked }
+
     private var feedback: String {
         let chipText = Self.quickChips.filter { chips.contains($0) && $0 != "Perfect" }
         let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -54,27 +72,38 @@ struct AdjustRecipeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                Text("How did it go?").serifTitle(Theme.Fonts.header).accessibilityAddTraits(.isHeader)
+                Text(isCooked ? "How did it go?" : "What do you want to change?")
+                    .serifTitle(Theme.Fonts.header).accessibilityAddTraits(.isHeader)
                 Text(saved.title).font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
 
-                MiseCard {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                        HStack(spacing: Theme.Spacing.s) {
-                            thumb(1, symbol: "hand.thumbsup", label: "Liked it")
-                            thumb(-1, symbol: "hand.thumbsdown", label: "Didn't like it")
+                if isCooked {
+                    MiseCard {
+                        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                            HStack(spacing: Theme.Spacing.s) {
+                                thumb(1, symbol: "hand.thumbsup", label: "Liked it")
+                                thumb(-1, symbol: "hand.thumbsdown", label: "Didn't like it")
+                            }
+                            ChipGroup(items: Self.quickChips, title: { $0 }, isSelected: { chips.contains($0) },
+                                      toggle: { c in if chips.contains(c) { chips.remove(c) } else { chips.insert(c) } },
+                                      identifier: { "adjust.chip.\($0)" })
                         }
-                        ChipGroup(items: Self.quickChips, title: { $0 }, isSelected: { chips.contains($0) },
-                                  toggle: { c in if chips.contains(c) { chips.remove(c) } else { chips.insert(c) } },
-                                  identifier: { "adjust.chip.\($0)" })
                     }
-                }
 
-                CookPhotoSection(photo: $photo)
+                    CookPhotoSection(photo: $photo)
+                }
 
                 MiseCard {
                     VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                        Text("What did you change?").font(.headline).foregroundStyle(Color.mise.ink)
-                        TextField("e.g. used chicken thighs instead of breast, needed 10 more minutes", text: $text, axis: .vertical)
+                        if isCooked {
+                            Text("What did you change?").font(.headline).foregroundStyle(Color.mise.ink)
+                        } else {
+                            Text("Say it in your own words, e.g. " + Self.changeExamples.map { "“\($0)”" }.joined(separator: ", ") + ".")
+                                .font(Theme.Fonts.meta)
+                                .foregroundStyle(Color.mise.inkSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        TextField(isCooked ? "e.g. used chicken thighs instead of breast, needed 10 more minutes" : "e.g. use less salt and more garlic",
+                                  text: $text, axis: .vertical)
                             .lineLimit(3...8)
                             .padding(Theme.Spacing.s)
                             .background(Color.mise.surfaceSunken, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
@@ -88,17 +117,17 @@ struct AdjustRecipeView: View {
                     }
                 }
 
-                if !keptSwaps.isEmpty { swapsCard }
+                if isCooked, !keptSwaps.isEmpty { swapsCard }
 
                 if let proposals {
                     proposalsCard(proposals)
                 }
 
-                // Wrote up the version you actually made? Diff it against this recipe instead.
+                // Wrote up the version you actually made (or want)? Diff it against this recipe instead.
                 NavigationLink {
-                    PasteMyVersionView(saved: saved, markCooked: true, cookPhoto: photo) { dismiss() }
+                    PasteMyVersionView(saved: saved, markCooked: isCooked, cookPhoto: isCooked ? photo : nil) { dismiss() }
                 } label: {
-                    Label("Paste your own version instead", systemImage: "doc.on.clipboard")
+                    Label(isCooked ? "Paste your own version instead" : "Paste a whole new version instead", systemImage: "doc.on.clipboard")
                         .font(Theme.Fonts.meta)
                         .frame(minHeight: Theme.Size.minTap)
                 }
@@ -113,19 +142,21 @@ struct AdjustRecipeView: View {
         .safeAreaInset(edge: .bottom) {
             Button("Save", action: save)
                 .buttonStyle(.misePrimary)
+                // A change with nothing to change has nothing to save ("I made this" logs the cook).
+                .disabled(!isCooked && feedback.isEmpty && (proposals ?? []).chosenEdits.isEmpty)
                 .padding(.horizontal, Theme.Spacing.gutter)
                 .padding(.vertical, Theme.Spacing.s)
                 .background(Color.mise.background)
                 .accessibilityIdentifier("adjust.save")
         }
-        .navigationTitle("I made this")
+        .navigationTitle(isCooked ? "I made this" : "Change recipe")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         }
         .onAppear {
             rating = saved.rating ?? 0
-            if keptSwaps.isEmpty {
+            if isCooked, keptSwaps.isEmpty {
                 let base = saved.recipe
                 keptSwaps = sessionSwaps.compactMap { swap in
                     let edits = swap.recipeEdits(in: base)
@@ -175,9 +206,21 @@ struct AdjustRecipeView: View {
 
     private func proposalsCard(_ list: [EditProposal]) -> some View {
         SectionCard(title: "Suggested changes") {
-            if list.isEmpty {
-                Text("No changes to suggest. Your feedback will be saved as a note.")
+            if let servingsAsked {
+                // No edit stores servings; the stepper on the recipe scales the amounts.
+                Label("To make it for \(servingsAsked), use Servings on the recipe: the amounts scale as you cook.",
+                      systemImage: "person.2")
+                    .font(Theme.Fonts.meta)
                     .foregroundStyle(Color.mise.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("adjust.servingsHint")
+            }
+            if list.isEmpty {
+                if servingsAsked == nil {
+                    Text(isCooked ? "No changes to suggest. Your feedback will be saved as a note."
+                                  : "No changes to suggest. What you wrote will be saved as a note.")
+                        .foregroundStyle(Color.mise.inkSecondary)
+                }
             } else {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     ForEach(Array(list.enumerated()), id: \.element.id) { index, proposal in
@@ -240,21 +283,23 @@ struct AdjustRecipeView: View {
         let recipe = saved.recipe
         let prefs = context.profile().prefs
         let assistant = provider.assistant
+        let kind = mode.feedbackKind
         isThinking = true
         Task {
             var edits: [RecipeEdit]
             var name = assistant.displayName
             do {
-                edits = try await assistant.proposeEdits(recipe: recipe, feedback: feedback, prefs: prefs)
+                edits = try await assistant.proposeEdits(recipe: recipe, feedback: feedback, kind: kind, prefs: prefs)
             } catch {
                 let rules = RuleBasedAssistant()
                 edits = (try? await rules.proposeEdits(recipe: recipe, feedback: feedback, prefs: prefs)) ?? []
                 name = rules.displayName
             }
             // Step changes from the feedback show a before/after (the rules found the steps).
-            let changes = FeedbackParser().analyse(feedback, recipe: recipe).stepChanges
-            let base = [EditProposal].feedback(edits, recipe: recipe, changes: changes)
+            let analysis = FeedbackParser().analyse(feedback, recipe: recipe)
+            let base = [EditProposal].feedback(edits, recipe: recipe, changes: analysis.stepChanges)
             proposals = base
+            servingsAsked = kind == .change ? analysis.servings : nil
             proposedFor = feedback
             assistantName = name
             isThinking = false
@@ -264,7 +309,7 @@ struct AdjustRecipeView: View {
             // could only note into its step (replacing the note, ticked). The rules offer none.
             guard !edits.isEmpty else { return }
             isRewording = true
-            let rewrites = (try? await assistant.proposeStepRewrites(recipe: recipe, edits: edits, feedback: feedback)) ?? []
+            let rewrites = (try? await assistant.proposeStepRewrites(recipe: recipe, edits: edits, feedback: feedback, kind: kind)) ?? []
             isRewording = false
             guard proposedFor == feedback, !rewrites.isEmpty, var current = proposals else { return }
             current.add(rewrites, base: base)
@@ -274,13 +319,24 @@ struct AdjustRecipeView: View {
 
     private func save() {
         // Kept cook-mode swaps first, then the feedback's edits.
-        var edits = keptSwaps.filter(\.included).flatMap(\.edits) + (proposals ?? []).chosenEdits
-        // Feedback typed but never turned into suggestions is kept as a note, so nothing is lost.
+        var edits = (isCooked ? keptSwaps.filter(\.included).flatMap(\.edits) : []) + (proposals ?? []).chosenEdits
+        // Feedback typed but never turned into suggestions is kept as a note, so nothing is lost
+        // (unless all it asked for was a serving size, which the hint already answered).
         let pending = feedback
         if !pending.isEmpty && (proposals == nil || pending != proposedFor) {
             edits.append(.addNote(pending))
-        } else if let proposals, proposals.isEmpty, !pending.isEmpty {
+        } else if let proposals, proposals.isEmpty, !pending.isEmpty, servingsAsked == nil {
             edits.append(.addNote(pending))
+        }
+        guard isCooked else {
+            // "Change recipe": a revision only, no cook logged, no rating.
+            if !edits.isEmpty {
+                saved.apply(edits, summary: "Changed: " + edits.summary(in: saved.recipe))
+                try? context.save()
+            }
+            onSaved()
+            dismiss()
+            return
         }
         let summary = edits.isEmpty ? "Cooked it" : "Cooked it: " + edits.summary(in: saved.recipe)
         saved.apply(edits, summary: summary)
@@ -314,4 +370,21 @@ struct AdjustRecipeView: View {
         .environment(AssistantProvider())
         .preferredColorScheme(.dark)
         .dynamicTypeSize(.accessibility5)
+}
+
+#Preview("Change recipe, light") {
+    let container = PreviewData.container
+    let saved = try! container.mainContext.fetch(FetchDescriptor<SavedRecipe>()).first!
+    return NavigationStack { AdjustRecipeView(saved: saved, mode: .change) }
+        .modelContainer(container)
+        .environment(AssistantProvider())
+}
+
+#Preview("Change recipe, dark") {
+    let container = PreviewData.container
+    let saved = try! container.mainContext.fetch(FetchDescriptor<SavedRecipe>()).first!
+    return NavigationStack { AdjustRecipeView(saved: saved, mode: .change) }
+        .modelContainer(container)
+        .environment(AssistantProvider())
+        .preferredColorScheme(.dark)
 }
