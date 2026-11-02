@@ -219,7 +219,8 @@ public struct StepFeedbackParser: Sendable {
             sig.verbs = Self.lemmas(in: object)
             return sig
         }
-        if let m = Rx.firstMatch("^(?:(?:didn't|did not) (?:have time|get|bother) to|had no time to|forgot to|didn't|did not|never)\\s+(\\w+(?: \\w+)?)", in: s),
+        // Also as an instruction: "don't marinate the chicken", "don't bother to toast the spices".
+        if let m = Rx.firstMatch("^(?:(?:didn't|did not|don't|do not) (?:have time|get|bother) to|had no time to|forgot to|didn't|did not|never|don't|do not)\\s+(\\w+(?: \\w+)?)", in: s),
            !Rx.test("^cover", m[1]!), !Self.lemmas(in: m[1]!).isEmpty {
             sig.skip = true
             sig.skipByVerb = true
@@ -227,10 +228,10 @@ public struct StepFeedbackParser: Sendable {
             return sig
         }
 
-        // Covering.
-        if Rx.test("\\b(?:uncovered|without (?:a |the )?lid|lid off|no lid|didn't cover|did not cover|never covered|left (?:it |the lid )?(?:off|uncovered)|open pan)\\b", s) {
+        // Covering ("cover the chicken", "leave it uncovered", "don't cover it").
+        if Rx.test("\\b(?:uncovered|without (?:a |the )?lid|lid off|no lid|didn't cover|did not cover|don't cover|do not cover|never covered|left (?:it |the lid )?(?:off|uncovered)|open pan|without covering)\\b", s) {
             sig.cover = false
-        } else if Rx.test("\\b(?:covered|with (?:a |the )?lid|lid on|put (?:a|the) lid on)\\b", s) {
+        } else if Rx.test("\\b(?:covered|with (?:a |the )?lid|lid on|put (?:a|the) lid on)\\b|^cover\\b", s) {
             sig.cover = true
         }
 
@@ -346,9 +347,20 @@ public struct StepFeedbackParser: Sendable {
         for (i, ids) in links.steps.enumerated() { for id in ids where firstMention[id] == nil { firstMention[id] = i } }
         let lead = mentioned.first
 
-        // Ingredient words are scored through the links instead.
+        // Ingredient words are scored through the links instead. Except "sauce", which also names
+        // a part of the dish ("cook the sauce 2 minutes longer"); in the steps it only counts
+        // outside an ingredient's name ("the sauce", not "soy sauce").
         let ingredientWords = Set(recipe.ingredients.flatMap { IngredientCatalog.normalise($0.name).split(separator: " ").map(String.init) })
+            .subtracting(["sauce"])
         let clauseWords = Self.contentWords(clause).subtracting(ingredientWords)
+        let sauceNames = Set(recipe.ingredients.map { IngredientCatalog.normalise($0.name) }
+            .compactMap { Rx.firstMatch("(\\w+ sauce)$", in: $0)?[1] })
+        func stepWords(_ step: String) -> Set<String> {
+            guard clauseWords.contains("sauce") else { return Self.contentWords(step) }
+            var text = IngredientCatalog.normalise(step)
+            for name in sauceNames { text = text.replacingOccurrences(of: name, with: " ") }
+            return Self.contentWords(text)
+        }
         let longest = recipe.steps.map { Self.mainSpans(in: $0).map(\.upperMinutes).max() ?? 0 }
         var scores: [Int] = []
         // Whether the clause names something in the step (label, ingredient, verb, word, old time);
@@ -358,7 +370,7 @@ public struct StepFeedbackParser: Sendable {
             var score = 0, named = false
             if let label = Self.label(of: step), Self.containsLabel(label, in: clause) { score += 4; named = true }
             // Other things both name ("the vegetables", "the noodles"): 2, or 3 for two or more.
-            let shared = clauseWords.intersection(Self.contentWords(step)).count
+            let shared = clauseWords.intersection(stepWords(step)).count
             if shared > 0 { score += min(3, shared + 1); named = true }
             // A different method (oven, grill) replaces the long cook.
             if sig.method, longest[i] > 0, longest[i] == longest.max() { score += 2 }

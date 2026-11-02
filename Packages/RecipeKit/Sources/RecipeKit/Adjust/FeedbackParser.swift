@@ -14,7 +14,8 @@ public struct FeedbackParser: Sendable {
     }
 
     /// Words that start a new clause after "and" / "but" / "so".
-    static let clauseStarters = "it|i|we|they|that|this|was|were|needed|need|used|use|added|add|skipped|left|omitted|replaced|subbed|substituted|swapped|threw|tossed|cooked|baked|simmered|took|too|less|more|cut|doubled|double|halved|didn't|did not|no|not|next|the (?:\\w+ )?(?:was|were|needed)"
+    /// Imperatives count too ("…and cook the chicken on high", "…and skip step 8").
+    static let clauseStarters = "it|i|we|they|that|this|was|were|needed|need|used|use|added|add|skipped|skip|left|leave|omitted|omit|replaced|replace|subbed|substituted|substitute|swapped|swap|switch|remove|threw|tossed|cooked|cook|baked|bake|simmered|simmer|fry|stir[- ]?fry|marinate|took|too|less|more|cut|doubled|double|halved|halve|didn't|did not|don't|do not|no|not|next|make|the (?:\\w+ )?(?:was|were|needed)"
 
     /// Clauses that carry no information; dropped rather than kept as notes.
     static let filler = "^(?:no (?:changes?|problems?|issues?|complaints?)|nothing(?: else)?|none|n/?a|ok(?:ay)?|that'?s it|thanks?|(?:it was |it's |was )?(?:so |really |very |just )?(?:perfect|delicious|great|good|tasty|lovely|amazing|excellent|yum(?:my)?|just right|spot on)(?: as is)?)$"
@@ -29,6 +30,8 @@ public struct FeedbackParser: Sendable {
         var edits: [RecipeEdit] = []
         var consumed = false
         var leftover: String?
+        /// "make it serve 6": understood, but not a change the recipe can save.
+        var servings: Int?
 
         static let unmatched = ClauseResult()
         static func of(_ edits: [RecipeEdit]) -> ClauseResult { ClauseResult(edits: edits, consumed: !edits.isEmpty) }
@@ -46,6 +49,9 @@ public struct FeedbackParser: Sendable {
         public var stepChanges: [StepChange]
         /// The feedback without the clauses that became step changes ("" when all did).
         public var otherFeedback: String
+        /// "make it serve 6": the servings asked for. Not an edit: servings scale on the recipe
+        /// screen, and no edit kind stores them.
+        public var servings: Int? = nil
     }
 
     public func analyse(_ feedback: String, recipe: Recipe) -> Analysis {
@@ -54,6 +60,7 @@ public struct FeedbackParser: Sendable {
         var stepChanges: [StepChange] = []
         var other: [String] = []
         var edits: [RecipeEdit] = []
+        var servings: Int?
         for sentence in StepFeedbackParser.mergingContinuedSentences(Self.sentences(feedback)) {
             var unmatched: [String] = []
             var kept: [String] = []
@@ -63,8 +70,12 @@ public struct FeedbackParser: Sendable {
                     add(change, to: &stepChanges, recipe: recipe)
                     continue
                 }
-                kept.append(clause)
                 let result = parse(clause: clause, recipe: recipe)
+                if let n = result.servings {
+                    servings = n
+                    continue
+                }
+                kept.append(clause)
                 if !result.consumed {
                     if !Self.isFiller(clause) { unmatched.append(clause) }
                     continue
@@ -82,7 +93,7 @@ public struct FeedbackParser: Sendable {
         }
         var all = Self.resolvingConflicts(edits)
         for change in stepChanges where !all.contains(change.edit) { all.append(change.edit) }
-        return Analysis(edits: all, stepChanges: stepChanges, otherFeedback: other.joined(separator: ". "))
+        return Analysis(edits: all, stepChanges: stepChanges, otherFeedback: other.joined(separator: ". "), servings: servings)
     }
 
     /// A second change to a step already rewritten builds on the rewrite; otherwise both are kept
@@ -154,10 +165,15 @@ public struct FeedbackParser: Sendable {
     static func bare(_ clause: String) -> String {
         var s = clause.lowercased().replacingOccurrences(of: "’", with: "'").collapsedWhitespace
         s = Rx.replace("^(?:i|we|also|then|but|and|so|just)\\s+", in: s, with: "")
+        // Instructions: "please use less salt", "next time, cook it on high", "I'd like to skip step 8".
+        for _ in 0..<2 { s = Rx.replace(instructionLead, in: s, with: "") }
         s = Rx.replace("^(?:i|we)\\s+", in: s, with: "")
         s = Rx.replace("\\s+(?:next time|this time|than (?:written|the recipe said|listed)|in it|overall|though|too)$", in: s, with: "")
         return s.trimmingCharacters(in: CharacterSet(charactersIn: " ,:"))
     }
+
+    /// Words that only make a clause an instruction ("please", "next time", "I'd like to").
+    static let instructionLead = "^(?:please|pls|let's|lets|always|try(?: to)?|next time,?|from now on,?|in (?:the )?future,?|going forward,?|(?:i|we)(?:'d| would) (?:like|prefer|rather) to|(?:i|we) want to|(?:i|we|you) should|(?:i|we)'ll|(?:i|we) will|(?:i|we)'m going to|can you|could you|make sure (?:to|you|i)|remember to|want to)\\s+"
 
     // MARK: Patterns
 
@@ -175,18 +191,33 @@ public struct FeedbackParser: Sendable {
         }
 
         // Replacements.
-        if let m = Rx.firstMatch("^(?:used|use|tried|went with|had to use)\\s+(.+?)\\s+instead of\\s+(.+)$", in: s)
+        if let m = Rx.firstMatch("^(?:used|use|tried|went with|go with|had to use)\\s+(.+?)\\s+(?:instead of|in place of|rather than)\\s+(.+)$", in: s)
             ?? Rx.firstMatch("^(.+?)\\s+instead of\\s+(.+)$", in: s) {
             return .of(replacement(new: m[1]!, old: m[2]!, recipe: recipe))
         }
-        if let m = Rx.firstMatch("^replaced\\s+(.+?)\\s+with\\s+(.+)$", in: s) {
+        if let m = Rx.firstMatch("^(?:replaced|replace)\\s+(.+?)\\s+(?:with|for|by)\\s+(.+)$", in: s) {
             return .of(replacement(new: m[2]!, old: m[1]!, recipe: recipe))
         }
-        if let m = Rx.firstMatch("^(?:subbed|substituted|subbed in|substituted in)\\s+(.+?)\\s+for\\s+(.+)$", in: s) {
+        if let m = Rx.firstMatch("^(?:subbed|substituted|subbed in|substituted in|sub|substitute|sub in|substitute in)\\s+(.+?)\\s+for\\s+(.+)$", in: s) {
             return .of(replacement(new: m[1]!, old: m[2]!, recipe: recipe))
         }
-        if let m = Rx.firstMatch("^swapped(?: out)?\\s+(.+?)\\s+(?:for|with)\\s+(.+)$", in: s) {
+        if let m = Rx.firstMatch("^(?:swapped|swap|switched|switch|exchange)(?: out)?\\s+(.+?)\\s+(?:for|with)\\s+(.+)$", in: s) {
             return .of(replacement(new: m[2]!, old: m[1]!, recipe: recipe))
+        }
+        // "change the oil to 2 tbsp", "switch the chicken to thighs", "reduce the oil to 1 tbsp".
+        if let m = Rx.firstMatch("^(change|switch|reduce|cut|cut back|lower|increase|up|bump up|raise)\\s+(.+?)\\s+to\\s+(.+)$", in: s),
+           let original = findIngredient(m[2]!, in: recipe) {
+            // Only "change"/"switch" can name another ingredient ("cut the chicken to bite-size
+            // pieces" is not a swap).
+            let amountOnly = !["change", "switch"].contains(m[1]!)
+            // "to 2 tbsp": an amount of the same ingredient.
+            let target = Rx.test("^[\\d½¼¾⅓⅔⅛]", m[3]!) ? m[3]! + " " + original.name : m[3]!
+            return .of(use(target, for: original, amountOnly: amountOnly))
+        }
+
+        // Servings aren't an edit ("make it serve 6"): the stepper on the recipe scales amounts.
+        if let n = Self.servings(in: s) {
+            return ClauseResult(consumed: true, servings: n)
         }
 
         // Taste, with a negation guard ("wasn't too salty") and "hot" pans not counting as spicy.
@@ -203,8 +234,8 @@ public struct FeedbackParser: Sendable {
         }
 
         // Removals. "left the X out" / "skipped X" / "no X" (only when X is in the recipe).
-        if let m = Rx.firstMatch("^left\\s+(.+?)\\s+out$", in: s)
-            ?? Rx.firstMatch("^(?:skipped|skip|left out|leave out|omitted|omit|didn't use|did not use|didn't add|did not add|didn't have|did not have|went without|forgot)\\s+(.+)$", in: s) {
+        if let m = Rx.firstMatch("^(?:left|leave|take)\\s+(.+?)\\s+out$", in: s)
+            ?? Rx.firstMatch("^(?:skipped|skip|left out|leave out|omitted|omit|didn't use|did not use|didn't add|did not add|didn't have|did not have|went without|forgot|remove|take out|drop|ditch|lose|cut out|get rid of|don't use|do not use|don't add|do not add|don't put in|do not put in|hold|go without|make it without|without)\\s+(.+)$", in: s) {
             return .of(removals(m[1]!, recipe: recipe))
         }
         if let m = Rx.firstMatch("^no\\s+(.+)$", in: s) {
@@ -213,13 +244,15 @@ public struct FeedbackParser: Sendable {
 
         // Scaling.
         let scales: [(String, Double)] = [
-            ("^(?:used\\s+)?(?:double|doubled)\\s+(.+)$", 2),
-            ("^(?:used\\s+)?(?:half|halved)\\s+(?:of\\s+)?(.+)$", 0.5),
+            ("^(?:used\\s+|use\\s+)?(?:double|doubled)(?:\\s+up\\s+on)?\\s+(.+)$", 2),
+            ("^(?:used\\s+|use\\s+)?(?:half|halved|halve)\\s+(?:of\\s+)?(.+)$", 0.5),
+            ("^(?:cut|reduce|cut down|cut back)\\s+(.+?)\\s+(?:in|by)\\s+half$", 0.5),
             ("^(?:there was\\s+|it had\\s+)?too much\\s+(.+)$", 0.75),
-            ("^(?:used\\s+|use\\s+|add\\s+|added\\s+|needs\\s+|needed\\s+)?less\\s+(.+)$", 0.75),
-            ("^(?:cut back on|cut down on|cut down|reduced|reduce)\\s+(.+)$", 0.75),
+            ("^(?:used\\s+|use\\s+|add\\s+|added\\s+|needs\\s+|needed\\s+|put\\s+)?(?:a (?:bit|little|touch|lot)\\s+)?less\\s+(.+)$", 0.75),
+            ("^(?:cut back on|cut down on|cut down|reduced|reduce|go easy on|go light on|ease up on|tone down)\\s+(.+)$", 0.75),
             ("^(?:there was\\s+|it had\\s+)?not enough\\s+(.+)$", 1.25),
-            ("^(?:used\\s+|use\\s+|add\\s+|added\\s+|needs\\s+|needed\\s+|wanted\\s+|could use\\s+)?(?:more|extra)\\s+(.+)$", 1.25),
+            ("^(?:used\\s+|use\\s+|add\\s+|added\\s+|needs\\s+|needed\\s+|wanted\\s+|could use\\s+|put\\s+)?(?:a (?:bit|little|touch|lot)\\s+)?(?:more|extra)\\s+(.+)$", 1.25),
+            ("^(?:increase|bump up|boost)\\s+(.+)$", 1.25),
         ]
         for (pattern, factor) in scales {
             if let m = Rx.firstMatch(pattern, in: s) {
@@ -229,8 +262,20 @@ public struct FeedbackParser: Sendable {
         }
 
         // Additions: "added X", "threw in X". Items already in the recipe become "more X".
-        if let m = Rx.firstMatch("^(?:added|add|threw in|tossed in|stirred in|put in|topped (?:it )?with|finished (?:it )?with|garnished with)\\s+(.+)$", in: s) {
-            return .of(additions(m[1]!, recipe: recipe))
+        if let m = Rx.firstMatch("^(?:added|add|threw in|tossed in|stirred in|put in|topped (?:it )?with|finished (?:it )?with|garnished with|throw in|toss in|stir in|top (?:it )?with|finish (?:it )?with|garnish (?:it )?with)\\s+(.+)$", in: s) {
+            let edits = additions(m[1]!, recipe: recipe)
+            // An instruction ("add a squeeze of lime at the end") adds the new ingredient with its
+            // timing as the line's note; a report ("added lime at the end") stays a note, as before.
+            if edits.isEmpty, !Rx.test("^(?:added|threw|tossed|stirred|put|topped|finished|garnished)\\b", s) {
+                return .of(timedAddition(m[1]!, recipe: recipe))
+            }
+            return .of(edits)
+        }
+
+        // "use 2 tbsp oil" (an amount), "use chicken thighs" (another form of a listed ingredient).
+        if let m = Rx.firstMatch("^(?:use|only use|go with)\\s+(?:only\\s+|just\\s+)?(.+)$", in: s),
+           let original = findIngredient(m[1]!, in: recipe) {
+            return .of(use(m[1]!, for: original))
         }
         return .unmatched
     }
@@ -299,6 +344,64 @@ public struct FeedbackParser: Sendable {
     }
 
     // MARK: Builders
+
+    /// "use 2 tbsp oil" → the oil's amount; "use chicken thighs" → swap the chicken for thighs
+    /// (keeping its amount). Nothing when the text says what the recipe already says.
+    func use(_ text: String, for original: Ingredient, amountOnly: Bool = false) -> [RecipeEdit] {
+        let parsed = IngredientLineParser.parse(Self.stripArticles(text))
+        if parsed.name.isEmpty || isJustName(parsed.name, of: original) || amountOnly {
+            guard parsed.name.isEmpty || isJustName(parsed.name, of: original) else { return [] }
+            guard let quantity = parsed.quantity,
+                  quantity != original.quantity || parsed.unit != original.unit else { return [] }
+            var changed = original
+            changed.quantity = quantity
+            changed.unit = parsed.unit
+            changed.raw = changed.displayText
+            return [.replaceIngredient(id: original.id, with: [changed], reason: RecipeEdit.amountChangeReason)]
+        }
+        return replace(original, with: text).map { [$0] } ?? []
+    }
+
+    /// A new ingredient added at a particular moment: "a squeeze of lime at the end" → lime, with
+    /// "a squeeze, at the end" as its note. Nothing for an ingredient already in the recipe.
+    func timedAddition(_ text: String, recipe: Recipe) -> [RecipeEdit] {
+        var rest = text.trimmed
+        var notes: [String] = []
+        if let m = Rx.firstMatch("^(a (?:little bit|bit|little|splash|squeeze|handful|pinch|dash|drizzle|sprinkle|few)(?: of)?)\\s+(.+)$", in: rest) {
+            notes.append(Rx.replace("\\s+of$", in: m[1]!, with: ""))
+            rest = m[2]!
+        }
+        if let m = Rx.firstMatch("^(.+?)\\s+((?:right |just )?(?:at the (?:end|start|beginning)|to finish|before serving|halfway(?: through)?|first|last))$", in: rest) {
+            rest = m[1]!
+            notes.append(m[2]!)
+        }
+        guard !notes.isEmpty, findIngredient(rest, in: recipe) == nil, var ing = newIngredient(rest),
+              !Rx.test(Self.nonIngredientObject, ing.name.lowercased()),
+              !Rx.test(Self.additionQualifiers, ing.name.lowercased()) else { return [] }
+        ing.note = ([ing.note].compactMap { $0 } + notes).joined(separator: ", ")
+        ing.raw = ing.displayText
+        return [.addIngredient(ing)]
+    }
+
+    static let numberWords = ["one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+                              "nine": 9, "ten": 10, "eleven": 11, "twelve": 12]
+
+    /// "make it serve 6", "scale it to 8 people", "make it for four", "change servings to 2".
+    static func servings(in s: String) -> Int? {
+        let n = "(\\d+|" + numberWords.keys.joined(separator: "|") + ")"
+        let people = "(?:\\s+(?:people|persons|servings|portions|of us|adults))?"
+        let patterns = [
+            "^(?:make (?:it|this|the recipe) |scale (?:it|this|the recipe) (?:up |down )?to )?(?:serve|serves|feed|feeds)\\s+\(n)\(people)$",
+            "^(?:make (?:it|this|the recipe|enough|it enough)|scale (?:it|this|the recipe)?\\s*(?:up|down)?|cook)\\s+(?:for|to)\\s+\(n)\(people)$",
+            "^(?:change|set|make)\\s+(?:the\\s+)?(?:servings?|portions?|yield)\\s+(?:to\\s+)?\(n)$",
+            "^\(n)\\s+(?:servings|portions)$",
+        ]
+        for pattern in patterns {
+            guard let m = Rx.firstMatch(pattern, in: s), let word = m[1] else { continue }
+            if let value = Int(word) ?? numberWords[word], (1...50).contains(value) { return value }
+        }
+        return nil
+    }
 
     func replacement(new: String, old: String, recipe: Recipe) -> [RecipeEdit] {
         guard let original = findIngredient(old, in: recipe), let edit = replace(original, with: new) else { return [] }
@@ -415,6 +518,18 @@ public struct FeedbackParser: Sendable {
         "mix", "cream", "sugar", "salt", "pepper", "cheese", "noodle", "bean",
     ]
 
+    /// Words that make an ingredient a different product from the thing it's named after.
+    static let productWords: Set<String> = ["oil", "butter", "milk", "flour", "vinegar", "wine", "extract", "stock", "broth"]
+
+    /// True when `ingredient` is made from what `said` names: a said word directly followed by a
+    /// product word that wasn't said ("peanut oil" for "peanuts"; not "sherry or rice wine").
+    static func isProduct(_ ingredient: Ingredient, of said: Set<String>) -> Bool {
+        let tokens = IngredientCatalog.normalise(ingredient.name).split(separator: " ").map(String.init)
+        return tokens.indices.dropLast().contains { i in
+            said.contains(tokens[i]) && productWords.contains(tokens[i + 1]) && !said.contains(tokens[i + 1])
+        }
+    }
+
     static func contentWords(_ text: String, dropGeneric: Bool) -> Set<String> {
         var words = Set(IngredientCatalog.normalise(stripArticles(text)).split(separator: " ").map(String.init))
             .subtracting(stopWords)
@@ -449,12 +564,14 @@ public struct FeedbackParser: Sendable {
             }
             let all = Self.contentWords(cleaned, dropGeneric: false)
             guard !all.isEmpty, !all.isSubset(of: Self.genericWords) else { return nil }
-            return recipe.ingredients.first { all.isSubset(of: words($0)) }
+            // "peanuts" is not the peanut oil, nor "sesame" the sesame oil: a product made from it.
+            return recipe.ingredients.first { all.isSubset(of: words($0)) && !Self.isProduct($0, of: all) }
         }
         let content = Self.contentWords(cleaned, dropGeneric: true)
         guard !content.isEmpty else { return nil }
         var best: (Ingredient, Int)?
-        for ing in recipe.ingredients {
+        let said = Self.contentWords(cleaned, dropGeneric: false)
+        for ing in recipe.ingredients where !Self.isProduct(ing, of: said) {
             let overlap = content.intersection(words(ing)).count
             if overlap > 0, overlap > (best?.1 ?? 0) { best = (ing, overlap) }
         }
