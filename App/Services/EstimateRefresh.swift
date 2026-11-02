@@ -19,6 +19,8 @@ enum EstimateRefresh {
         let all = (try? context.fetch(FetchDescriptor<SavedRecipe>())) ?? []
         var changed = false
         for saved in all where saved.refreshStaleEstimates() { changed = true }
+        // Titles saved before SEO-title cleanup; rides along with the same launch pass.
+        for saved in all where saved.cleanStoredTitles() { changed = true }
         if changed { try? context.save() }
     }
 

@@ -120,6 +120,12 @@ struct FixtureImportTests {
         #expect(recipe.imageURL?.absoluteString == "https://example.com/img/toast.jpg")
     }
 
+    @Test func seoTitleKeepsTheFirstName() {
+        #expect(RecipeTitle.clean("Pepper Chicken | Pepper Chicken Recipe | Pepper Chicken Dry Recipe") == "Pepper Chicken")
+        #expect(RecipeTitle.clean("Chow Mein") == "Chow Mein")
+        #expect(RecipeTitle.clean("Mac & Cheese") == "Mac & Cheese")
+    }
+
     @Test func cleanTitleKeepsOrdinaryColons() {
         #expect(TextRecipeParser.cleanTitle("Cookbook:Kung Pao Chicken - Wikibooks, open books for an open world") == "Kung Pao Chicken")
         #expect(TextRecipeParser.cleanTitle("Dal: A Weeknight Version") == "Dal: A Weeknight Version")

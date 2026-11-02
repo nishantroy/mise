@@ -93,9 +93,10 @@ public enum TextRecipeParser {
     }
 
     /// "Chow Mein - RecipeTin Eats" → "Chow Mein". Only strips a short trailing site name,
-    /// and a wiki namespace prefix ("Cookbook:Kung Pao Chicken" → "Kung Pao Chicken").
+    /// a wiki namespace prefix ("Cookbook:Kung Pao Chicken" → "Kung Pao Chicken"), and the
+    /// SEO variants after the first "|" ("Pepper Chicken | Pepper Chicken Recipe | …").
     static func cleanTitle(_ title: String) -> String {
-        var title = title
+        var title = RecipeTitle.clean(title)
         if let m = Rx.firstMatch("^(.+?)\\s+[-|–—]\\s+[^-|–—]{2,60}$", in: title), let head = m[1], head.count >= 3 {
             title = head.trimmed
         }
@@ -103,5 +104,18 @@ public enum TextRecipeParser {
             title = rest
         }
         return title
+    }
+}
+
+/// Drops SEO variants after the first " | " ("Pepper Chicken | Pepper Chicken Recipe | …" →
+/// "Pepper Chicken"). Safe for any title, including JSON-LD names and titles saved before this
+/// existed; page-title clean-up (site names, wiki prefixes) stays in `TextRecipeParser.cleanTitle`.
+public enum RecipeTitle {
+    public static func clean(_ title: String) -> String {
+        let title = title.trimmed
+        guard title.contains(" | "), let head = title.components(separatedBy: " | ").first?.trimmed, head.count >= 3 else {
+            return title
+        }
+        return head
     }
 }

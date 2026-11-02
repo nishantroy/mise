@@ -71,7 +71,7 @@ public enum JSONLDRecipeParser {
         let cuisines = strings(node["recipeCuisine"]).map(HTMLText.clean).filter { !$0.isEmpty }
 
         return Recipe(
-            title: title.isEmpty ? "Untitled recipe" : title,
+            title: title.isEmpty ? "Untitled recipe" : RecipeTitle.clean(title),
             sourceURL: url,
             imageURL: imageURL(node["image"], base: url),
             servings: servings(node["recipeYield"] ?? node["yield"]),

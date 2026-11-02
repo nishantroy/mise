@@ -66,6 +66,27 @@ extension SchemaV2 {
             return changed
         }
 
+        /// Applies `RecipeTitle.clean` to titles saved before it existed ("Pepper Chicken |
+        /// Pepper Chicken Recipe | …" → "Pepper Chicken"), on the current and original versions.
+        /// True when anything changed. Not a revision.
+        @discardableResult
+        func cleanStoredTitles() -> Bool {
+            var changed = false
+            var current = recipe
+            let cleaned = RecipeTitle.clean(current.title)
+            if cleaned != current.title {
+                current.title = cleaned
+                recipe = current
+                changed = true
+            }
+            if var base = ModelCoding.decode(Recipe.self, from: originalData), RecipeTitle.clean(base.title) != base.title {
+                base.title = RecipeTitle.clean(base.title)
+                originalData = ModelCoding.encode(base)
+                changed = true
+            }
+            return changed
+        }
+
         /// Stores a model-refined estimate for the current version, if it still fits (the recipe
         /// may have been edited while the model was thinking).
         func refineEstimate(_ estimate: TimeEstimate) {
