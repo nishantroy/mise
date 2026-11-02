@@ -87,7 +87,8 @@ struct FeedbackParserTests {
     }
 
     @Test func addedExistingBecomesMore() {
-        #expect(edits("added more garlic") == [.scaleIngredient(id: id("garlic"), factor: 1.25)])
+        // 3 cloves → 4 (whole cloves).
+        #expect(edits("added more garlic") == [.scaleIngredient(id: id("garlic"), factor: 4.0 / 3)])
     }
 
     // MARK: Scale

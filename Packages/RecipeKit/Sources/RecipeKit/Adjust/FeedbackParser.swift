@@ -4,13 +4,19 @@ import Foundation
 /// and as hints for the model when it is.
 public struct FeedbackParser: Sendable {
     public let catalog: IngredientCatalog
+    /// A report of a cook ("I made this") or instructions for the recipe ("Change recipe"). In
+    /// `.change` every clause is first read as an instruction (`ChangeIntent`), whatever its tense
+    /// or form, and notes don't say "than last time".
+    public var kind: FeedbackKind
 
-    public init(catalog: IngredientCatalog = .shared) {
+    public init(catalog: IngredientCatalog = .shared, kind: FeedbackKind = .cooked) {
         self.catalog = catalog
+        self.kind = kind
     }
 
-    public static func edits(from feedback: String, recipe: Recipe, catalog: IngredientCatalog = .shared) -> [RecipeEdit] {
-        FeedbackParser(catalog: catalog).edits(from: feedback, recipe: recipe)
+    public static func edits(from feedback: String, recipe: Recipe, kind: FeedbackKind = .cooked,
+                             catalog: IngredientCatalog = .shared) -> [RecipeEdit] {
+        FeedbackParser(catalog: catalog, kind: kind).edits(from: feedback, recipe: recipe)
     }
 
     /// Words that start a new clause after "and" / "but" / "so".
@@ -52,6 +58,17 @@ public struct FeedbackParser: Sendable {
         /// "make it serve 6": the servings asked for. Not an edit: servings scale on the recipe
         /// screen, and no edit kind stores them.
         public var servings: Int? = nil
+        /// Notes (in `edits`) the rules made because they couldn't turn what was said into a
+        /// change: the app asks whether to keep each as a note or change the recipe instead.
+        public var unresolved: [UnresolvedNote] = []
+        /// Notes the cook asked for ("note: …", "remember that …"): always notes.
+        public var explicitNotes: [String] = []
+
+        /// The unresolved note behind a `.addNote` edit, if it is one.
+        public func unresolved(for edit: RecipeEdit) -> UnresolvedNote? {
+            guard case let .addNote(text) = edit else { return nil }
+            return unresolved.first { $0.note == text }
+        }
     }
 
     public func analyse(_ feedback: String, recipe: Recipe) -> Analysis {
@@ -61,16 +78,36 @@ public struct FeedbackParser: Sendable {
         var other: [String] = []
         var edits: [RecipeEdit] = []
         var servings: Int?
+        var unresolved: [UnresolvedNote] = []
+        var explicit: [String] = []
+        func addUnresolved(_ note: String, said: String) {
+            guard !unresolved.contains(where: { $0.note == note }) else { return }
+            unresolved.append(unresolvedNote(note, said: said, recipe: recipe, links: links))
+        }
         for sentence in StepFeedbackParser.mergingContinuedSentences(Self.sentences(feedback)) {
+            // "note: …", "remember that …": kept as written, never parsed.
+            if let note = Self.explicitNote(in: sentence) {
+                if !edits.contains(.addNote(note)) { edits.append(.addNote(note)) }
+                explicit.append(note)
+                continue
+            }
             var unmatched: [String] = []
             var kept: [String] = []
             for clause in StepFeedbackParser.mergingContinuations(Self.clauses(sentence)) {
+                // "Change recipe": the clause is read as an instruction first ("used 2 tbsp oil",
+                // "2 tbsp oil is enough", "can we…?" → "use 2 tbsp oil"); the rules then read it as usual.
+                let text = kind == .change ? ChangeIntent.instruction(clause) : clause
                 // Steps first: "cooked the chicken 5 min on high" is about step 7, not the chicken.
-                if let change = steps.change(for: clause, recipe: recipe, links: links) {
-                    add(change, to: &stepChanges, recipe: recipe)
+                if var change = steps.change(for: text, recipe: recipe, links: links) {
+                    if text != clause { change = change.said(clause, recipe: recipe) }
+                    add(change, text: text, to: &stepChanges, recipe: recipe)
+                    if case let .note(note) = change.outcome, !unresolved.contains(where: { $0.note == note }) {
+                        unresolved.append(UnresolvedNote(note: note, said: change.clause, stepIndex: change.stepIndex,
+                                                         ingredientID: nil, isStepNote: true))
+                    }
                     continue
                 }
-                let result = parse(clause: clause, recipe: recipe)
+                let result = parse(clause: text, recipe: recipe)
                 if let n = result.servings {
                     servings = n
                     continue
@@ -80,25 +117,72 @@ public struct FeedbackParser: Sendable {
                     if !Self.isFiller(clause) { unmatched.append(clause) }
                     continue
                 }
-                for e in result.edits where !edits.contains(e) { edits.append(e) }
+                for e in result.edits where !edits.contains(e) {
+                    edits.append(e)
+                    // A rule's own note ("Use less salt" with no salt amount) is a fallback, not a change.
+                    if case let .addNote(note) = e { addUnresolved(note, said: StepFeedbackParser.tidy(clause)) }
+                }
                 if let leftover = result.leftover, !Rx.test(Self.filler, leftover) { unmatched.append(leftover) }
             }
             if !unmatched.isEmpty {
-                // Feedback is never lost: whatever the rules didn't understand is kept as a note.
-                let text = unmatched.joined(separator: ", ")
-                let note = text.prefix(1).uppercased() + text.dropFirst()
-                if !edits.contains(.addNote(note)) { edits.append(.addNote(note)) }
+                // Feedback is never lost: whatever the rules didn't understand is kept as a note. A
+                // report keeps one note per sentence; instructions one per clause, so each can become
+                // its own change.
+                for group in kind == .change ? unmatched.map({ [$0] }) : [unmatched] {
+                    let text = group.joined(separator: ", ")
+                    var note = text.prefix(1).uppercased() + text.dropFirst()
+                    if kind == .change { note = StepFeedbackParser.tidy(note) }
+                    if !edits.contains(.addNote(note)) { edits.append(.addNote(note)) }
+                    addUnresolved(note, said: note)
+                }
             }
             if !kept.isEmpty { other.append(kept.joined(separator: ", ")) }
         }
         var all = Self.resolvingConflicts(edits)
         for change in stepChanges where !all.contains(change.edit) { all.append(change.edit) }
-        return Analysis(edits: all, stepChanges: stepChanges, otherFeedback: other.joined(separator: ". "), servings: servings)
+        // Only notes still in the edits, and never one the cook asked for.
+        unresolved.removeAll { u in !all.contains(.addNote(u.note)) || explicit.contains(u.note) }
+        return Analysis(edits: all, stepChanges: stepChanges, otherFeedback: other.joined(separator: ". "), servings: servings,
+                        unresolved: unresolved, explicitNotes: explicit)
+    }
+
+    /// An unresolved note with the step and ingredient it most likely concerns.
+    public func unresolvedNote(_ note: String, said: String, recipe: Recipe) -> UnresolvedNote {
+        unresolvedNote(note, said: said, recipe: recipe, links: StepIngredientLinker(catalog: catalog).links(for: recipe))
+    }
+
+    func unresolvedNote(_ note: String, said: String, recipe: Recipe, links: StepIngredientLinker.Links) -> UnresolvedNote {
+        let text = kind == .change ? ChangeIntent.instruction(said) : said
+        // What was said names it, or the rule's note does ("Use less salt" for "too salty").
+        let mentioned = StepIngredientLinker(catalog: catalog)
+            .links(for: Recipe(title: "", ingredients: recipe.ingredients, steps: [said, note])).steps.flatMap { $0 }
+        let ingredient = recipe.ingredients.first { mentioned.contains($0.id) }?.id
+            ?? findIngredient(Rx.replace("^\\w+\\s+", in: Self.bare(text), with: ""), in: recipe)?.id
+        return UnresolvedNote(note: note, said: said,
+                              stepIndex: StepFeedbackParser(catalog: catalog).likelyStep(for: text, recipe: recipe, links: links),
+                              ingredientID: ingredient, isStepNote: false)
+    }
+
+    /// "note: serve with rice", "add a note: …", "remember that it's better the next day" → the
+    /// note's text. Nil for anything else ("remember to add salt" is an instruction).
+    static func explicitNote(in sentence: String) -> String? {
+        let s = sentence.replacingOccurrences(of: "’", with: "'").collapsedWhitespace
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ,.;:!"))
+        let patterns = [
+            "^(?:please\\s+)?(?:note|nb|n\\.b\\.|tip|reminder|note to self|for the notes?)\\s*[:–—-]\\s*(.+)$",
+            "^(?:please\\s+)?(?:can you\\s+|could you\\s+)?(?:add|make|save|keep|leave|write|put)(?: (?:it|this))?(?: down)?(?: as)? (?:a |the )?note(?: (?:that|saying|to say|about))?\\s*[:,–—-]?\\s+(.+)$",
+            "^(?:just\\s+)?(?:remember|keep in mind|bear in mind|worth noting|note)\\s+that\\s+(.+)$",
+        ]
+        for pattern in patterns {
+            guard let m = Rx.firstMatch(pattern, in: s), let body = m[1]?.trimmed, !body.isEmpty else { continue }
+            return body.prefix(1).uppercased() + body.dropFirst()
+        }
+        return nil
     }
 
     /// A second change to a step already rewritten builds on the rewrite; otherwise both are kept
-    /// (a removal wins over a rewrite of the same step).
-    func add(_ change: StepChange, to changes: inout [StepChange], recipe: Recipe) {
+    /// (a removal wins over a rewrite of the same step). `text` is the clause as the rules read it.
+    func add(_ change: StepChange, text: String? = nil, to changes: inout [StepChange], recipe: Recipe) {
         guard let i = changes.firstIndex(where: { $0.stepIndex == change.stepIndex }) else {
             changes.append(change)
             return
@@ -109,10 +193,10 @@ public struct FeedbackParser: Sendable {
             return
         case (_, .remove):
             changes[i] = change
-        case let (.rewrite(text), _):
+        case let (.rewrite(rewrite), _):
             var rewritten = recipe
-            rewritten.steps[change.stepIndex] = text
-            if let again = StepFeedbackParser(catalog: catalog).change(for: change.clause, recipe: rewritten), case .rewrite = again.outcome {
+            rewritten.steps[change.stepIndex] = rewrite
+            if let again = StepFeedbackParser(catalog: catalog).change(for: text ?? change.clause, recipe: rewritten), case .rewrite = again.outcome {
                 changes[i] = StepChange(stepIndex: change.stepIndex, outcome: again.outcome,
                                         clause: previous.clause + "; " + change.clause, wantsModel: false)
             } else {
@@ -181,7 +265,11 @@ public struct FeedbackParser: Sendable {
         let s = Self.bare(clause)
         guard !s.isEmpty else { return .unmatched }
 
-        // Time: "needed 10 more minutes", "cooked it 5 extra minutes", "needed more time".
+        // Time: "needed 10 more minutes", "cooked it 5 extra minutes", "needed more time". (No step
+        // was found. A report becomes a note about the cook; an instruction stays in its own words.)
+        if kind == .change, Rx.test("\\b(?:more|extra|additional|further|another|longer)\\b.*\\b(?:min|minutes|mins|time)\\b|^(?:it\\s+)?(?:needs?|takes?|cook it|cook) (?:a bit |a little |a lot |much )?(?:more|longer)(?:\\s+time)?$", s) {
+            return .unmatched
+        }
         if let m = Rx.firstMatch("(\\d+)\\s*(?:more|extra|additional|further)\\s*(?:min|minutes|mins)\\b", in: s)
             ?? Rx.firstMatch("(?:another|an extra|an additional|extra)\\s+(\\d+)\\s*(?:min|minutes|mins)\\b", in: s) {
             return .of([.addNote("Needed about \(m[1]!) more minutes than written")])
@@ -485,17 +573,41 @@ public struct FeedbackParser: Sendable {
     }
 
     /// Amendment: scaling an ingredient without a quantity becomes a note instead of a no-op.
+    /// Things counted whole ("3 cloves garlic", "2 eggs") are scaled to a whole number.
     public func scale(_ ingredient: Ingredient, factor: Double) -> RecipeEdit {
-        if ingredient.quantity == nil {
+        guard let quantity = ingredient.quantity, quantity > 0 else {
             let word = factor < 1 ? "less" : "more"
-            return .addNote("Use \(word) \(ingredient.name.lowercased()) than last time")
+            return .addNote(noteText("Use \(word) \(ingredient.name.lowercased()) than last time"))
         }
-        return .scaleIngredient(id: ingredient.id, factor: factor)
+        return .scaleIngredient(id: ingredient.id, factor: Self.wholeFactor(factor, for: ingredient, quantity: quantity))
+    }
+
+    /// Units counted in whole pieces. An ingredient with no unit and a whole amount ("2 eggs",
+    /// "3 green chillies", "1 onion") is counted too.
+    static let wholeUnits: Set<String> = ["clove", "can", "slice", "stalk", "sprig", "piece", "packet", "head", "stick", "pod",
+                                         "leaf", "bunch", "whole", "egg", "tin", "fillet", "breast", "thigh", "sheet"]
+
+    /// `factor` adjusted so a counted ingredient lands on a whole number: 3 cloves × 1.25 → 4,
+    /// 3 × 0.75 → 2; it always moves by at least one, and never below one (½ for a single item).
+    static func wholeFactor(_ factor: Double, for ingredient: Ingredient, quantity q: Double) -> Double {
+        let isWhole = abs(q - q.rounded()) < 0.001
+        let counted = ingredient.unit.map { wholeUnits.contains($0.lowercased()) } ?? isWhole
+        guard counted, isWhole, abs(factor - 1) > 0.001 else { return factor }
+        var target = (q * factor).rounded()
+        if target == q { target = factor > 1 ? q + 1 : q - 1 }
+        if target < 1 { target = factor < 1 && q <= 1 ? 0.5 : 1 }
+        return target / q
+    }
+
+    /// A rule's note: "Use less salt than last time" in a report, "Use less salt" as an instruction.
+    func noteText(_ text: String) -> String {
+        guard kind == .change else { return text }
+        return Rx.replace("\\s+(?:than last time|next time)$", in: text, with: "")
     }
 
     func adjust(ids: Set<String>, factor: Double, recipe: Recipe, fallbackNote: String) -> [RecipeEdit] {
         let targets = recipe.ingredients.filter { ($0.catalogID ?? catalog.match($0.name)?.id).map(ids.contains) ?? false }
-        return targets.isEmpty ? [.addNote(fallbackNote)] : targets.map { scale($0, factor: factor) }
+        return targets.isEmpty ? [.addNote(noteText(fallbackNote))] : targets.map { scale($0, factor: factor) }
     }
 
     func adjust(tags tag: IngredientTag, factor: Double, recipe: Recipe, fallbackNote: String) -> [RecipeEdit] {
@@ -503,7 +615,15 @@ public struct FeedbackParser: Sendable {
             let entry = ing.catalogID.flatMap(catalog.entry(id:)) ?? catalog.match(ing.name)
             return entry?.tags.contains(tag) == true
         }
-        return targets.isEmpty ? [.addNote(fallbackNote)] : targets.map { scale($0, factor: factor) }
+        return targets.isEmpty ? [.addNote(noteText(fallbackNote))] : targets.map { scale($0, factor: factor) }
+    }
+
+    /// The cook's own wording for an ingredient ("4 cloves garlic", "chicken thighs") as an edit:
+    /// an amount change for the same ingredient, a swap otherwise. Nil when nothing changes.
+    public func ingredientChange(_ original: Ingredient, to text: String) -> RecipeEdit? {
+        let trimmed = text.trimmed
+        guard !trimmed.isEmpty, trimmed.lowercased() != original.displayText.lowercased() else { return nil }
+        return use(trimmed, for: original).first
     }
 
     // MARK: Matching

@@ -139,7 +139,8 @@ struct ReviewRegressionTests {
 
     @Test func addedJustTheNameIsMore() {
         let r = recipe(["3 cloves garlic"])
-        #expect(FeedbackParser.edits(from: "I added the garlic", recipe: r) == [.scaleIngredient(id: r.ingredients[0].id, factor: 1.25)])
+        // Cloves are whole: 3 × 1.25 rounds to 4.
+        #expect(FeedbackParser.edits(from: "I added the garlic", recipe: r) == [.scaleIngredient(id: r.ingredients[0].id, factor: 4.0 / 3)])
     }
 
     // MARK: #9 splitter

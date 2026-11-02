@@ -14,6 +14,10 @@ public struct RuleBasedAssistant: RecipeAssistant {
         FeedbackParser(catalog: catalog).edits(from: feedback, recipe: recipe)
     }
 
+    public func proposeEdits(recipe: Recipe, feedback: String, kind: FeedbackKind, prefs: UserPreferences) async throws -> [RecipeEdit] {
+        FeedbackParser(catalog: catalog, kind: kind).edits(from: feedback, recipe: recipe)
+    }
+
     public func suggestSwaps(for ingredient: Ingredient, in recipe: Recipe,
                              pantry: PantrySnapshot, prefs: UserPreferences) async throws -> [SwapSuggestion] {
         let id = ingredient.catalogID ?? catalog.match(ingredient.name)?.id

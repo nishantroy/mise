@@ -167,15 +167,25 @@ public enum StepRewrites {
     /// Steps the cook's feedback is about that the rules couldn't rewrite (a different method,
     /// order, or a time the rules couldn't place): one request per step-attached note in `edits`
     /// (`editIndex` = that note), at most `maxFeedbackRequests`.
-    public static func feedbackRequests(recipe: Recipe, edits: [RecipeEdit], feedback: String,
+    ///
+    /// "Change recipe" (`.change`) also sends what the rules couldn't place at all (a note in
+    /// `edits` the cook didn't ask for) to the step it most likely concerns, after the step notes.
+    public static func feedbackRequests(recipe: Recipe, edits: [RecipeEdit], feedback: String, kind: FeedbackKind = .cooked,
                                         catalog: IngredientCatalog = .shared) -> [StepRewriteRequest] {
-        let changes = FeedbackParser(catalog: catalog).analyse(feedback, recipe: recipe).stepChanges
+        let analysis = FeedbackParser(catalog: catalog, kind: kind).analyse(feedback, recipe: recipe)
         var out: [StepRewriteRequest] = []
-        for change in changes where change.wantsModel && out.count < maxFeedbackRequests {
+        for change in analysis.stepChanges where change.wantsModel && out.count < maxFeedbackRequests {
             guard case .note = change.outcome, let k = edits.firstIndex(of: change.edit),
                   !out.contains(where: { $0.stepIndex == change.stepIndex }) else { continue }
             out.append(StepRewriteRequest(kind: .feedback(clause: change.clause), editIndex: k,
                                           stepIndex: change.stepIndex, required: [], removed: []))
+        }
+        guard kind == .change else { return out }
+        for note in analysis.unresolved where !note.isStepNote && out.count < maxFeedbackRequests {
+            guard let step = note.stepIndex, let k = edits.firstIndex(of: .addNote(note.note)),
+                  !out.contains(where: { $0.stepIndex == step }) else { continue }
+            out.append(StepRewriteRequest(kind: .feedback(clause: note.said), editIndex: k,
+                                          stepIndex: step, required: [], removed: []))
         }
         return out
     }

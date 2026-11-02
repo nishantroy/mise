@@ -341,6 +341,36 @@ public struct StepFeedbackParser: Sendable {
             let index = n < 0 ? recipe.steps.count - 1 : n
             return recipe.steps.indices.contains(index) ? index : nil
         }
+        let (scores, specific) = self.scores(sig, clause: clause, recipe: recipe, links: links)
+        guard let best = scores.max(), best >= 3 else { return nil }
+        let winners = scores.indices.filter { scores[$0] == best }
+        return winners.count == 1 && specific[winners[0]] ? winners[0] : nil
+    }
+
+    /// The step a clause the rules couldn't use most likely concerns, to pre-select when the
+    /// cook chooses one: a step number, else the best score if the clause names something in it
+    /// (ties go to the first). Nil when nothing points at a step.
+    public func likelyStep(for clause: String, recipe: Recipe) -> Int? {
+        likelyStep(for: clause, recipe: recipe, links: StepIngredientLinker(catalog: catalog).links(for: recipe))
+    }
+
+    func likelyStep(for clause: String, recipe: Recipe, links: StepIngredientLinker.Links) -> Int? {
+        guard !recipe.steps.isEmpty else { return nil }
+        var sig = signal(clause, recipe: recipe) ?? StepSignal()
+        if sig.verbs.isEmpty { sig.verbs = Self.lemmas(in: FeedbackParser.bare(clause)) }
+        if sig.stepNumber == nil { sig.stepNumber = Self.stepNumber(in: FeedbackParser.bare(clause)) }
+        if let n = sig.stepNumber {
+            let index = n < 0 ? recipe.steps.count - 1 : n
+            return recipe.steps.indices.contains(index) ? index : nil
+        }
+        let (scores, specific) = self.scores(sig, clause: clause, recipe: recipe, links: links)
+        guard let best = scores.indices.filter({ specific[$0] }).max(by: { scores[$0] < scores[$1] }),
+              scores[best] >= 2 else { return nil }
+        return scores.indices.first { specific[$0] && scores[$0] == scores[best] }
+    }
+
+    /// Each step's score for a clause, and whether the clause names something in it.
+    func scores(_ sig: StepSignal, clause: String, recipe: Recipe, links: StepIngredientLinker.Links) -> (scores: [Int], specific: [Bool]) {
         let linker = StepIngredientLinker(catalog: catalog)
         let mentioned = linker.links(for: Recipe(title: "", ingredients: recipe.ingredients, steps: [clause])).steps.first ?? []
         var firstMention: [UUID: Int] = [:]
@@ -400,9 +430,7 @@ public struct StepFeedbackParser: Sendable {
             scores.append(score)
             specific.append(named)
         }
-        guard let best = scores.max(), best >= 3 else { return nil }
-        let winners = scores.indices.filter { scores[$0] == best }
-        return winners.count == 1 && specific[winners[0]] ? winners[0] : nil
+        return (scores, specific)
     }
 
     // MARK: Change

@@ -24,7 +24,7 @@ struct ImperativeFeedbackTests {
         ("woksoflife-shortcut-mongolian-ground-beef", "swap the Shaoxing wine for mirin", ["Swapped Shaoxing wine for mirin"]),
         ("woksoflife-shortcut-mongolian-ground-beef", "use 2 tbsp oil", ["Change neutral oil: ¼ cup → 2 tbsp"]),
         ("woksoflife-shortcut-mongolian-ground-beef", "remove the dried chili peppers", ["Leave out dried red chili peppers"]),
-        ("woksoflife-shortcut-mongolian-ground-beef", "next time use more garlic", ["More garlic: 3 cloves → 3 ¾ cloves"]),
+        ("woksoflife-shortcut-mongolian-ground-beef", "next time use more garlic", ["More garlic: 3 cloves → 4 cloves"]),
         ("woksoflife-shortcut-mongolian-ground-beef", "marinate the beef for 10 minutes",
          ["Step 1: Combine the ground beef, Shaoxing wine, soy sauce and baking soda in a medium bowl. Leave the beef to marinate for 10 minutes while you prep the other ingredients. (Or if making ahead, cover and refrigerate overnight.)"]),
         // Chow mein.

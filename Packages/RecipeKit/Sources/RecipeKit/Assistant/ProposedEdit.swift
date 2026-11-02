@@ -23,8 +23,8 @@ public struct ProposedEdit: Hashable, Sendable {
 
     /// Maps names back to recipe ingredients with the same matcher the rules use.
     /// Returns nil for anything that doesn't map (unknown ingredient, empty text, no-op factor).
-    public func map(in recipe: Recipe, catalog: IngredientCatalog = .shared) -> RecipeEdit? {
-        let parser = FeedbackParser(catalog: catalog)
+    public func map(in recipe: Recipe, kind feedbackKind: FeedbackKind = .cooked, catalog: IngredientCatalog = .shared) -> RecipeEdit? {
+        let parser = FeedbackParser(catalog: catalog, kind: feedbackKind)
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         switch kind {
         case .replace:
@@ -63,11 +63,12 @@ public struct ProposedEdit: Hashable, Sendable {
     }
 
     /// Maps a list, dropping unmappable and duplicate edits (and duplicate targets).
-    public static func map(_ proposals: [ProposedEdit], in recipe: Recipe, catalog: IngredientCatalog = .shared) -> [RecipeEdit] {
+    public static func map(_ proposals: [ProposedEdit], in recipe: Recipe, kind: FeedbackKind = .cooked,
+                           catalog: IngredientCatalog = .shared) -> [RecipeEdit] {
         var out: [RecipeEdit] = []
         var touched: Set<UUID> = []
         for p in proposals {
-            guard let edit = p.map(in: recipe, catalog: catalog), !out.contains(edit) else { continue }
+            guard let edit = p.map(in: recipe, kind: kind, catalog: catalog), !out.contains(edit) else { continue }
             if let id = edit.targetID {
                 guard !touched.contains(id) else { continue }
                 touched.insert(id)
