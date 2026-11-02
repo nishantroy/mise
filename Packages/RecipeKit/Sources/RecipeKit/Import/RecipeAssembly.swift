@@ -23,11 +23,13 @@ public struct ProposedRecipe: Hashable, Sendable {
 /// - **Steps** (all or nothing): every number in the source steps is kept; a model step has no
 ///   number the source steps don't; each model step's words come mostly from the source steps,
 ///   never mostly from the prose (so commentary can't become a step); every source step is
-///   still covered; 1–20 steps of one paragraph each.
+///   still covered; 1–20 steps of one paragraph each; no step is a bare ingredient line
+///   ("1 tsp cumin seeds", "Cilantro to garnish": `StepStyleParser.isBareIngredientLine`).
 /// - **Ingredients**: grounded like `ModelIngredientLines`, and an amount must be traceable to
 ///   one list item of a source step ("3 tbsp sugar") that also names the ingredient (the same
 ///   number, and the unit if any).
-///   The list is used only if it's not much thinner than the rules' (`ModelIngredientLines.choose`).
+///   The list is used only if it's not much thinner than the rules' (`ModelIngredientLines.choose`),
+///   and never when the paste lists its ingredients (the rules' list is the cook's own).
 /// - **Notes**: short, not commentary, numbers from the paste, words from the paste with at
 ///   least one from its prose (so a step can't be repeated as a note). Used only if there are at
 ///   least as many as the rules found. (At least ¾ of a note's words must be in the paste.)
@@ -55,8 +57,10 @@ public enum RecipeAssembly {
         let steps = validSteps(proposal.steps, source: analysis.steps, prose: prose)
         if let steps { recipe.steps = steps }
 
-        let modelIngredients = validIngredients(proposal.ingredients, sourceSteps: analysis.steps, catalog: catalog)
-        let ingredients = ModelIngredientLines.choose(model: modelIngredients, rules: rules.ingredients)
+        let modelIngredients = analysis.ingredients.isEmpty
+            ? validIngredients(proposal.ingredients, sourceSteps: analysis.steps, catalog: catalog) : []
+        let ingredients = analysis.ingredients.isEmpty
+            ? ModelIngredientLines.choose(model: modelIngredients, rules: rules.ingredients) : rules.ingredients
         recipe.ingredients = ingredients
 
         let notes = validNotes(proposal.notes, text: text, sourceSteps: analysis.steps, prose: prose)
@@ -79,6 +83,8 @@ public enum RecipeAssembly {
         let steps = proposed.map(tidyStep).filter { !$0.isEmpty }
         guard !steps.isEmpty, steps.count <= maxSteps, proposed.allSatisfy({ !$0.contains("\n\n") }),
               steps.allSatisfy({ $0.count <= 500 }) else { return nil }
+        // An ingredient list copied into the method ("1¾ tbsp black peppercorns" as step 1).
+        guard !steps.contains(where: StepStyleParser.isBareIngredientLine) else { return nil }
 
         // Numbers: none lost, none invented.
         let sourceNumbers = Set(source.flatMap(StepRewrites.numberTokens))

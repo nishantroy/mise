@@ -171,3 +171,30 @@ struct PepperChickenParseTests {
         #expect(pasted.recipe.servings == 2)
     }
 }
+
+@Suite("Model assembly of a write-up with an ingredient list")
+struct PepperChickenAssemblyTests {
+    @Test func modelStepsThatRepeatTheIngredientListAreRejected() throws {
+        let text = try Fixture.text("pepper-chicken-my-version")
+        let rules = try #require(RecipeImporter.parsePasted(text: text)).recipe
+        let listed = rules.ingredients.map(\.raw)
+        // A model that copies the list into the method, as the rules used to.
+        let bad = ProposedRecipe(servings: 4, ingredients: ["1 lb chicken"], steps: listed + PepperChicken.steps)
+        let result = RecipeAssembly.merge(bad, text: text, rules: rules)
+        #expect(!result.usedModelSteps)
+        #expect(result.recipe.steps == PepperChicken.steps)
+        // Listed ingredients are the cook's own; the model's list is never used for them.
+        #expect(!result.usedModelIngredients)
+        #expect(result.recipe.ingredients.map(PepperChicken.describe) == PepperChicken.ingredients)
+
+        let good = ProposedRecipe(servings: 4, steps: PepperChicken.steps)
+        #expect(RecipeAssembly.merge(good, text: text, rules: rules).usedModelSteps)
+    }
+
+    @Test func oneIngredientLineAmongModelStepsIsEnough() throws {
+        let text = try Fixture.text("mongolian-beef-my-version-markdown")
+        let rules = try #require(RecipeImporter.parsePasted(text: text)).recipe
+        #expect(RecipeAssembly.validSteps(rules.steps, source: rules.steps, prose: []) != nil)
+        #expect(RecipeAssembly.validSteps(["1 tbsp Lao Gan Ma"] + rules.steps, source: rules.steps, prose: []) == nil)
+    }
+}

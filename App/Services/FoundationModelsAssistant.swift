@@ -101,7 +101,7 @@ struct AssembledRecipe {
     var servings: Int
     @Guide(description: "Every ingredient, once, with the amount and unit written in the steps, e.g. \"1 tbsp sherry\" or \"1–2 Fresno chilies, sliced into rings\". Ingredients only.", .maximumCount(40))
     var ingredients: [String]
-    @Guide(description: "The instructions in order, one per step, with every number, time and temperature exactly as written. No section headings, no commentary.", .maximumCount(20))
+    @Guide(description: "The instructions in order, one per step, with every number, time and temperature exactly as written. No section headings, no commentary, no ingredient lines.", .maximumCount(20))
     var steps: [String]
     @Guide(description: "Tips or variations for next time, e.g. \"For more heat, add another chili.\" Never explanations of why something was changed. Empty if there are none.", .maximumCount(4))
     var notes: [String]
@@ -279,8 +279,8 @@ struct FoundationModelsAssistant: RecipeAssistant {
     static let assemblyInstructions = """
     You turn a home cook's recipe write-up into a structured recipe. The write-up may be markdown \
     from a chat assistant, with section headings, bullet points and some commentary. \
-    There is no ingredient list: build one from the amounts written in the steps, each ingredient once, \
-    with its amount and unit exactly as written. \
+    If there is no ingredient list, build one from the amounts written in the steps, each ingredient once, \
+    with its amount and unit exactly as written. An ingredient line is never a step. \
     Keep the cook's steps in order, one instruction per step, with every number, time and temperature \
     exactly as written. Don't add steps, and leave out section headings. \
     Tips and variations ("if you want…", "for more heat…") are notes, not steps. \
