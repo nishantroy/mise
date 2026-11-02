@@ -41,6 +41,8 @@ struct AdjustRecipeView: View {
     @State private var isRewording = false
     /// A proposed step being reworded by hand.
     @State private var editingStep: StepEditTarget?
+    /// An unresolved note being turned into a step or ingredient change by hand.
+    @State private var changingInstead: ChangeInsteadTarget?
     @State private var assistantName = ""
     @State private var keptSwaps: [KeptSwap] = []
     /// Downscaled in memory; written with the log entry on save.
@@ -67,6 +69,15 @@ struct AdjustRecipeView: View {
         let chipText = Self.quickChips.filter { chips.contains($0) && $0 != "Perfect" }
         let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return (chipText + (typed.isEmpty ? [] : [typed])).joined(separator: ". ")
+    }
+
+    /// "Change recipe" saves only what was chosen from suggestions for the text as it is now, so
+    /// nothing becomes a note without the cook picking "Save as note". ("I made this" can always save.)
+    private var canSaveChange: Bool {
+        guard !isCooked else { return true }
+        let chosen = !(proposals ?? []).chosenEdits.isEmpty
+        if feedback.isEmpty { return chosen }
+        return proposals != nil && proposedFor == feedback && chosen
     }
 
     var body: some View {
@@ -143,7 +154,7 @@ struct AdjustRecipeView: View {
             Button("Save", action: save)
                 .buttonStyle(.misePrimary)
                 // A change with nothing to change has nothing to save ("I made this" logs the cook).
-                .disabled(!isCooked && feedback.isEmpty && (proposals ?? []).chosenEdits.isEmpty)
+                .disabled(!canSaveChange)
                 .padding(.horizontal, Theme.Spacing.gutter)
                 .padding(.vertical, Theme.Spacing.s)
                 .background(Color.mise.background)
@@ -218,7 +229,7 @@ struct AdjustRecipeView: View {
             if list.isEmpty {
                 if servingsAsked == nil {
                     Text(isCooked ? "No changes to suggest. Your feedback will be saved as a note."
-                                  : "No changes to suggest. What you wrote will be saved as a note.")
+                                  : "Nothing here changes the recipe.")
                         .foregroundStyle(Color.mise.inkSecondary)
                 }
             } else {
@@ -232,8 +243,16 @@ struct AdjustRecipeView: View {
                                           identifier: rewrite.fromFeedback ? "adjust.step.\(rewrite.stepIndex)" : "adjust.rewrite.\(rewrite.stepIndex)") {
                                 editStep(rewrite.stepIndex, proposal: index, current: rewrite.removesStep ? rewrite.oldText : rewrite.newText)
                             }
+                        } else if let note = proposal.unresolved, !isCooked {
+                            // Nothing could turn it into a change: the cook chooses, nothing is ticked.
+                            UnresolvedNoteRow(note: note, isOn: isOn, identifier: "adjust.unresolved.\(index)") {
+                                changingInstead = ChangeInsteadTarget(proposalIndex: index, note: note)
+                            }
                         } else {
                             ProposalToggle(text: proposal.summary, isOn: isOn, identifier: "adjust.edit.\(index)")
+                            if let said = proposal.said {
+                                Text("You said: “\(said)”").font(Theme.Fonts.caption).foregroundStyle(Color.mise.inkSecondary)
+                            }
                             if let step = proposal.noteStep {
                                 // The rules (and the model) couldn't write it into the step: do it by hand.
                                 Button("Edit step \(step + 1) instead", systemImage: "pencil") {
@@ -242,6 +261,15 @@ struct AdjustRecipeView: View {
                                 .font(Theme.Fonts.meta)
                                 .tint(Color.mise.accent)
                                 .accessibilityIdentifier("adjust.editStep.\(step)")
+                            } else if let note = proposal.unresolved {
+                                // "I made this" keeps the note ticked, but a change can be made instead.
+                                Button("Change the recipe instead", systemImage: "pencil") {
+                                    changingInstead = ChangeInsteadTarget(proposalIndex: index, note: note)
+                                }
+                                .font(Theme.Fonts.meta)
+                                .tint(Color.mise.accent)
+                                .frame(minHeight: Theme.Size.minTap)
+                                .accessibilityIdentifier("adjust.changeInstead.\(index)")
                             }
                         }
                     }
@@ -264,6 +292,14 @@ struct AdjustRecipeView: View {
         .sheet(item: $editingStep) { target in
             StepEditSheet(title: "Step \(target.stepIndex + 1)", original: target.original, initial: target.initial) { text in
                 if let index = target.proposalIndex { proposals?.setStepText(text, at: index, original: target.original) }
+            }
+        }
+        .sheet(item: $changingInstead) { target in
+            let recipe = saved.recipe
+            ChangeInsteadSheet(note: target.note, recipe: recipe) { step, text in
+                proposals?.setStepText(text, at: target.proposalIndex, original: recipe.steps[step], step: step)
+            } onIngredient: { edit in
+                proposals?.resolve(at: target.proposalIndex, with: edit, recipe: recipe)
             }
         }
     }
@@ -292,12 +328,12 @@ struct AdjustRecipeView: View {
                 edits = try await assistant.proposeEdits(recipe: recipe, feedback: feedback, kind: kind, prefs: prefs)
             } catch {
                 let rules = RuleBasedAssistant()
-                edits = (try? await rules.proposeEdits(recipe: recipe, feedback: feedback, prefs: prefs)) ?? []
+                edits = (try? await rules.proposeEdits(recipe: recipe, feedback: feedback, kind: kind, prefs: prefs)) ?? []
                 name = rules.displayName
             }
             // Step changes from the feedback show a before/after (the rules found the steps).
-            let analysis = FeedbackParser().analyse(feedback, recipe: recipe)
-            let base = [EditProposal].feedback(edits, recipe: recipe, changes: analysis.stepChanges)
+            let analysis = FeedbackParser(kind: kind).analyse(feedback, recipe: recipe)
+            let base = [EditProposal].feedback(edits, recipe: recipe, changes: analysis.stepChanges, analysis: analysis, kind: kind)
             proposals = base
             servingsAsked = kind == .change ? analysis.servings : nil
             proposedFor = feedback

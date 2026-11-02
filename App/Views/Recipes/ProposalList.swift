@@ -14,6 +14,11 @@ struct EditProposal: Identifiable {
     var dependsOn: [UUID] = []
     /// For a note tied to a step ("Step 7 (Chicken): …"): that step, which can be edited by hand instead.
     var noteStep: Int? = nil
+    /// A note made because nothing could turn the cook's words into a change: the cook chooses
+    /// "Save as note" or "Change the recipe" (a step or an ingredient, by hand).
+    var unresolved: UnresolvedNote? = nil
+    /// The cook's words behind a change they made by hand from an unresolved note.
+    var said: String? = nil
 }
 
 extension Array where Element == EditProposal {
@@ -38,10 +43,22 @@ extension Array where Element == EditProposal {
 
     /// Proposals for the assistant's edits from "I made this" feedback. Step rewrites and removals
     /// show a before/after and are ticked like the other edits; a note tied to a step remembers it.
-    static func feedback(_ edits: [RecipeEdit], recipe: Recipe, changes: [StepChange]) -> [EditProposal] {
-        edits.map { edit in
-            EditProposal(edit: edit, summary: edit.summary(in: recipe), rewrite: changes.proposal(for: edit, in: recipe),
-                         noteStep: changes.stepIndex(forNote: edit))
+    ///
+    /// A note the cook didn't ask for (`analysis.unresolved`, or a model's note) is unresolved: in
+    /// "Change recipe" it starts unticked, so the cook picks "Save as note" or "Change the recipe";
+    /// in "I made this" it stays ticked, with "Change the recipe instead".
+    static func feedback(_ edits: [RecipeEdit], recipe: Recipe, changes: [StepChange],
+                         analysis: FeedbackParser.Analysis, kind: FeedbackKind) -> [EditProposal] {
+        let parser = FeedbackParser(kind: kind)
+        return edits.map { edit in
+            var unresolved = analysis.unresolved(for: edit)
+            if unresolved == nil, case let .addNote(text) = edit, !analysis.explicitNotes.contains(text) {
+                unresolved = parser.unresolvedNote(text, said: text, recipe: recipe)
+            }
+            return EditProposal(edit: edit, summary: edit.summary(in: recipe),
+                                included: !(kind == .change && unresolved != nil),
+                                rewrite: changes.proposal(for: edit, in: recipe),
+                                noteStep: changes.stepIndex(forNote: edit), unresolved: unresolved)
         }
     }
 
@@ -51,8 +68,10 @@ extension Array where Element == EditProposal {
         var others: [StepRewriteProposal] = []
         for rewrite in rewrites {
             if let k = rewrite.replacesEdit, base.indices.contains(k), let i = firstIndex(where: { $0.id == base[k].id }) {
+                // Still the note it was made for (the cook hasn't changed it by hand meanwhile).
+                guard self[i].edit == base[k].edit else { continue }
                 self[i] = EditProposal(edit: rewrite.edit, summary: "Change step \(rewrite.stepIndex + 1)",
-                                       included: self[i].included, rewrite: rewrite)
+                                       included: self[i].included || self[i].unresolved != nil, rewrite: rewrite)
             } else {
                 others.append(rewrite)
             }
@@ -60,12 +79,21 @@ extension Array where Element == EditProposal {
         self += Self.rewrites(others, dependingOn: base)
     }
 
-    /// The cook's own wording for the step a proposal is about; it becomes a ticked step change.
-    mutating func setStepText(_ text: String, at index: Int, original: String) {
-        guard indices.contains(index), let step = self[index].rewrite?.stepIndex ?? self[index].noteStep,
+    /// An unresolved note turned into an ingredient change by hand: a ticked change.
+    mutating func resolve(at index: Int, with edit: RecipeEdit, recipe: Recipe) {
+        guard indices.contains(index) else { return }
+        let said = self[index].unresolved?.said ?? self[index].said
+        self[index] = EditProposal(edit: edit, summary: edit.summary(in: recipe), included: true, said: said)
+    }
+
+    /// The cook's own wording for the step a proposal is about (or, for an unresolved note, the
+    /// step they picked); it becomes a ticked step change.
+    mutating func setStepText(_ text: String, at index: Int, original: String, step picked: Int? = nil) {
+        guard indices.contains(index), let step = picked ?? self[index].rewrite?.stepIndex ?? self[index].noteStep,
               !text.isEmpty, text != original else { return }
-        var reason = self[index].rewrite?.reason
+        var reason = self[index].rewrite?.reason ?? self[index].unresolved?.said
         if reason == nil, case let .addNote(note) = self[index].edit { reason = note }
+        self[index].unresolved = nil
         let rewrite = StepRewriteProposal(stepIndex: step, oldText: original, newText: text,
                                           dependsOn: self[index].rewrite?.dependsOn ?? [], reason: reason, fromFeedback: true)
         self[index].rewrite = rewrite

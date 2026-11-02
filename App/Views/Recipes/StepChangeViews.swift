@@ -106,56 +106,85 @@ struct StepChangeRow: View {
 struct StepEditSheet: View {
     let title: String
     let original: String
+    let initial: String
     let onSave: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var text: String
 
     init(title: String, original: String, initial: String, onSave: @escaping (String) -> Void) {
         self.title = title
         self.original = original
+        self.initial = initial
         self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            StepEditForm(title: title, original: original, initial: initial) { text in
+                onSave(text)
+                dismiss()
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+/// The step editor's content and its Done button, for a sheet or a pushed screen.
+struct StepEditForm: View {
+    let title: String
+    let original: String
+    /// Shown above the editor ("You said: …").
+    var context: String? = nil
+    let onDone: (String) -> Void
+
+    @State private var text: String
+
+    init(title: String, original: String, initial: String, context: String? = nil, onDone: @escaping (String) -> Void) {
+        self.title = title
+        self.original = original
+        self.context = context
+        self.onDone = onDone
         _text = State(initialValue: initial)
     }
 
     private var cleaned: String { text.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces) }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                    TextEditor(text: $text)
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 140)
-                        .padding(Theme.Spacing.xs)
-                        .background(Color.mise.surfaceSunken, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
-                        .accessibilityLabel("Step text")
-                        .accessibilityIdentifier("stepEdit.text")
-                    if cleaned != original {
-                        VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                            Text("As saved").font(Theme.Fonts.badge).foregroundStyle(Color.mise.inkSecondary)
-                            Text(original).font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
-                                .textSelection(.enabled)
-                        }
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                if let context {
+                    Text(context).font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                TextEditor(text: $text)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 140)
+                    .padding(Theme.Spacing.xs)
+                    .background(Color.mise.surfaceSunken, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+                    .accessibilityLabel("Step text")
+                    .accessibilityIdentifier("stepEdit.text")
+                if cleaned != original {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                        Text("As saved").font(Theme.Fonts.badge).foregroundStyle(Color.mise.inkSecondary)
+                        Text(original).font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
+                            .textSelection(.enabled)
                     }
                 }
-                .padding(Theme.Spacing.gutter)
             }
-            .miseScreenBackground()
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        onSave(cleaned)
-                        dismiss()
-                    }
+            .padding(Theme.Spacing.gutter)
+        }
+        .miseScreenBackground()
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { onDone(cleaned) }
                     .disabled(cleaned.isEmpty)
                     .accessibilityIdentifier("stepEdit.done")
-                }
             }
         }
-        .presentationDetents([.medium, .large])
     }
 }
