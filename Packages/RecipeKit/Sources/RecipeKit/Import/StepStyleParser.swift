@@ -1,17 +1,33 @@
 import Foundation
 
-/// Pasted recipes whose ingredients only appear inside the steps ("Slice ½ onion, 1 green bell
-/// pepper…"), with no "Ingredients" heading, often markdown copied from a chat app. The first
-/// line is the title (servings from "(serves 4)"). Short section labels ("**Prep first**",
-/// "## Sauce", "Cook") are dropped. Prose that isn't an instruction is sorted by `PasteProse`:
-/// tips and variations become notes, commentary aimed at the reader is dropped. Every other
-/// line is a step, kept verbatim apart from markdown and list markers. Ingredients come from
-/// `StepIngredientExtractor` (steps only, so a tip's amounts never become ingredients).
+/// Pasted write-ups (often markdown copied from a chat app), sorted line by line into a title,
+/// ingredient lines, steps, notes and dropped commentary.
+///
+/// **Sections decide first.** An "Ingredients" heading ("**Ingredients (3–4 servings)**",
+/// "What you'll need") starts the ingredient list, a method heading ("Steps", "Method",
+/// "Instructions"…) starts the steps, a notes heading starts notes. Sub-group labels
+/// ("*Pepper masala:*", "For the chicken", "## Sauce") are dropped and keep the current section.
+/// Under an ingredients heading every line is an ingredient, unless it reads like an
+/// instruction ("Rinse the rice."), which starts the method. Under a method heading every line
+/// is a step (prose aside). Bullets never decide: both lists are often "- " bullets.
+///
+/// **Without headings** a line that looks like an ingredient line (`ingredientLineKind`: a
+/// leading amount, "Salt to taste", or just a catalog ingredient, never a cooking verb or a
+/// sentence) is an ingredient when it comes before the first step, or when every line of its
+/// labelled block is one. Anything else follows the step-style rules: a step, kept verbatim
+/// apart from markdown and list markers ("Toast: Dry pan…" keeps its label; it reads well in
+/// cook mode), or prose sorted by `PasteProse` (tips → notes, commentary → dropped).
+///
+/// With no listed ingredients, they come from the steps (`StepIngredientExtractor`).
 public enum StepStyleParser {
-    /// What the rules make of a pasted write-up, before ingredient extraction.
+    /// What the rules make of a pasted write-up.
     public struct Analysis: Hashable, Sendable {
         public var title: String
         public var servings: Int?
+        /// "Serves 3–4" / "(3–4 servings)": `servings` is the lower bound.
+        public var servingsRange: ClosedRange<Int>?
+        /// Listed ingredient lines, markdown and list markers removed ("1¾ tbsp black peppercorns").
+        public var ingredients: [String]
         public var steps: [String]
         /// Tips and variations ("For a clear tingle, use ½–1 tsp Sichuan peppercorn.").
         public var notes: [String]
@@ -19,12 +35,17 @@ public enum StepStyleParser {
         public var dropped: [String]
     }
 
-    /// Returns nil when there are no steps or fewer than two ingredient mentions (so arbitrary
-    /// prose isn't taken for a recipe).
+    /// Returns nil when there are no steps, or (without listed ingredients) fewer than two
+    /// ingredient mentions in the steps (so arbitrary prose isn't taken for a recipe).
     public static func parse(text: String) -> Recipe? {
         guard let analysis = analyse(text: text), !analysis.steps.isEmpty else { return nil }
-        let ingredients = StepIngredientExtractor.extract(from: analysis.steps)
-        guard ingredients.count >= 2 else { return nil }
+        let ingredients: [Ingredient]
+        if !analysis.ingredients.isEmpty {
+            ingredients = analysis.ingredients.map(IngredientLineParser.parse)
+        } else {
+            ingredients = StepIngredientExtractor.extract(from: analysis.steps)
+            guard ingredients.count >= 2 else { return nil }
+        }
         return Recipe(title: analysis.title.isEmpty ? "Untitled recipe" : analysis.title, servings: analysis.servings,
                       ingredients: ingredients, steps: analysis.steps, notes: analysis.notes)
     }
@@ -33,51 +54,118 @@ public enum StepStyleParser {
         var text: String
         /// "- ", "* ", "• ", "1." or "1)" at the start.
         var isListItem: Bool
-        /// "# Heading", "**Whole line bold**", "__Whole line__".
+        /// "# Heading", "**Whole line bold**", "*Whole line italic:*", "__Whole line__".
         var isMarkdownHeading: Bool
+        /// A blank line (or the start of the text) comes right before it.
+        var followsBlank: Bool
     }
 
     static func lines(of text: String) -> [Line] {
-        text.components(separatedBy: .newlines).map(\.collapsedWhitespace).filter { !$0.isEmpty }.compactMap { raw in
-            let heading = Rx.test("^#{1,6}\\s", raw) || Rx.test("^(\\*\\*|__)[^*_]+\\1\\s*:?$", raw)
+        var out: [Line] = []
+        var blank = true
+        for raw in text.components(separatedBy: .newlines).map(\.collapsedWhitespace) {
+            guard !raw.isEmpty else { blank = true; continue }
+            let heading = Rx.test("^#{1,6}\\s", raw) || Rx.test("^(\\*\\*|__|\\*|_)(?=\\S)[^*_]+\\1\\s*:?$", raw)
             let listItem = Rx.test("^(?:[-*•–·▢□☐]\\s+|\\d{1,2}[.)]\\s+)", raw)
             let cleaned = JSONLDRecipeParser.stripStepNumber(TextRecipeParser.stripBullet(cleanMarkdown(raw)))
-            return cleaned.isEmpty ? nil : Line(text: cleaned, isListItem: listItem, isMarkdownHeading: heading)
+            guard !cleaned.isEmpty else { continue }
+            out.append(Line(text: cleaned, isListItem: listItem, isMarkdownHeading: heading, followsBlank: blank))
+            blank = false
         }
+        return out
     }
+
+    enum Section { case none, ingredients, method, notes }
 
     public static func analyse(text: String) -> Analysis? {
         let all = lines(of: text)
-        guard let first = all.first else { return nil }
-        let (title, titleServings) = titleAndServings(first.text)
-        var servings = titleServings
-        let body = Array(all.dropFirst())
+        guard !all.isEmpty else { return nil }
+
+        // Title: the first line, unless it's a section heading or chat prose ("A pound is about
+        // 450 g, so…"); prose before the title is sorted like any other prose.
+        var title = ""
+        var titleServings: (Int, ClosedRange<Int>?)?
+        var titleIndex: Int?
+        for (i, line) in all.enumerated() {
+            if sectionKind(line.text) != nil || line.isListItem { break }
+            if let kind = ingredientLineKind(line.text), kind != .name { break }
+            if isProse(line.text) { continue }
+            let parsed = titleAndServingsRange(line.text)
+            title = parsed.title
+            titleServings = parsed.servings
+            titleIndex = i
+            break
+        }
+        var servings = titleServings?.0
+        var servingsRange = titleServings?.1
+        let body = all.enumerated().filter { $0.offset != titleIndex }.map(\.element)
+
         // In a list-style write-up, unbulleted prose after the last list item is commentary or a
         // tip unless it reads like an instruction ("Serve hot").
         let listItems = body.indices.filter { body[$0].isListItem }
         let lastListItem = listItems.count >= 2 ? listItems.last : nil
+        // …and so is unbulleted prose before the first one ("A pound is about 450 g, so…").
+        let firstListItem = listItems.count >= 2 ? listItems.first : nil
 
-        var steps: [String] = [], notes: [String] = [], dropped: [String] = []
-        var inNotesSection = false
-        for (i, line) in body.enumerated() {
+        var ingredients: [String] = [], steps: [String] = [], notes: [String] = [], dropped: [String] = []
+        var section = Section.none
+        var i = 0
+        while i < body.count {
+            defer { i += 1 }
+            let line = body[i]
             let cleaned = line.text
+            let next = body.dropFirst(i + 1).first?.text
+
             // A "Serves 4" line on its own.
             if servings == nil, cleaned.count <= 30,
                let m = Rx.firstMatch("^(?:serves|servings|makes|yield)\\s*:?\\s*(\\d+)\\b[^.]*$", in: cleaned) {
                 servings = Int(m[1]!)
                 continue
             }
-            let next = body.dropFirst(i + 1).first?.text
-            if isHeading(line) || isSectionLabel(cleaned, next: next) {
-                inNotesSection = PasteProse.isNotesHeading(cleaned)
+            // Section headings.
+            if !line.isListItem, let kind = sectionKind(cleaned) {
+                section = kind
+                if kind == .ingredients, servings == nil, let found = headingServings(cleaned) {
+                    servings = found.lowerBound
+                    servingsRange = found.count > 1 ? found : nil
+                }
                 continue
             }
+            if isSubLabel(line, next: next, section: section, previous: i > 0 ? body[i - 1] : nil) {
+                if section == .notes || PasteProse.isNotesHeading(cleaned) {
+                    section = PasteProse.isNotesHeading(cleaned) ? .notes : .none
+                }
+                continue
+            }
+
+            switch section {
+            case .notes:
+                sortProse(cleaned, notes: &notes, dropped: &dropped)
+                continue
+            case .ingredients:
+                if ingredientLineKind(cleaned) != nil || !readsLikeInstruction(cleaned) {
+                    ingredients.append(cleaned)
+                    continue
+                }
+                section = .method  // "Rinse the rice." with no method heading: the steps have started.
+            case .none:
+                if !PasteProse.hasNotePrefix(cleaned), ingredientLineKind(cleaned) != nil,
+                   steps.isEmpty || blockIsAllIngredients(body, around: i) {
+                    ingredients.append(cleaned)
+                    continue
+                }
+            case .method:
+                break
+            }
+
             let isStep: Bool
-            if inNotesSection || PasteProse.hasNotePrefix(cleaned) {
+            if PasteProse.hasNotePrefix(cleaned) {
                 isStep = false
             } else if line.isListItem {
                 isStep = true
             } else if let lastListItem, i > lastListItem, !PasteProse.startsLikeInstruction(cleaned) {
+                isStep = false
+            } else if let firstListItem, i < firstListItem, section != .method, !PasteProse.startsLikeInstruction(cleaned) {
                 isStep = false
             } else {
                 isStep = !PasteProse.isAllProse(cleaned)
@@ -85,12 +173,96 @@ public enum StepStyleParser {
             if isStep {
                 steps.append(cleaned)
             } else {
-                let sorted = PasteProse.sort(cleaned)
-                notes += sorted.notes
-                dropped += sorted.dropped
+                sortProse(cleaned, notes: &notes, dropped: &dropped)
             }
         }
-        return Analysis(title: title, servings: servings, steps: steps, notes: notes, dropped: dropped)
+        return Analysis(title: title, servings: servings, servingsRange: servingsRange, ingredients: ingredients,
+                        steps: steps, notes: notes, dropped: dropped)
+    }
+
+    static func sortProse(_ line: String, notes: inout [String], dropped: inout [String]) {
+        let sorted = PasteProse.sort(line)
+        notes += sorted.notes
+        dropped += sorted.dropped
+    }
+
+    // MARK: Headings and labels
+
+    static let ingredientsHeading = "^(?:the\\s+)?(?:ingredients?|what you(?:'|’)?ll need|what you need|you(?:'|’)?ll need|shopping list)\\b"
+    static let methodHeading = "^(?:the\\s+)?(?:instructions?|directions?|method|steps?|preparation|procedure|how to (?:make|cook)(?: it)?|to make)(?:\\s+for\\b.*)?(?:\\s*\\([^)]*\\))?$"
+
+    /// "Ingredients (3–4 servings)" → .ingredients, "Steps" → .method, "Notes" → .notes; nil
+    /// for anything else.
+    static func sectionKind(_ text: String) -> Section? {
+        guard text.count <= 60, text.split(separator: " ").count <= 8, !Rx.test("[.!?]$", text) else { return nil }
+        let t = TextRecipeParser.normalise(text)
+        if Rx.test(ingredientsHeading, t) { return .ingredients }
+        if Rx.test(methodHeading, t) { return .method }
+        if PasteProse.isNotesHeading(t), !t.contains(":") || t.hasSuffix(":") { return .notes }
+        return nil
+    }
+
+    /// "Ingredients (3–4 servings)", "Ingredients for 4" → 3...4, 4...4.
+    static func headingServings(_ text: String) -> ClosedRange<Int>? {
+        let range = "(\\d+)(?:\\s*(?:[-–—]|to)\\s*(\\d+))?"
+        let m = Rx.firstMatch("\(range)\\s*(?:servings?|people|portions)\\b", in: text)
+            ?? Rx.firstMatch("\\b(?:serves|for|makes|feeds)\\s+\(range)\\b", in: text)
+        guard let m, let low = m[1].flatMap(Int.init) else { return nil }
+        let high = m[2].flatMap(Int.init) ?? low
+        return high >= low ? low...high : nil
+    }
+
+    /// A line that labels a group rather than saying what to use or do.
+    static func isSubLabel(_ line: Line, next: String?, section: Section, previous: Line?) -> Bool {
+        if line.isListItem { return false }  // "- Salt to taste" is an ingredient, never a label.
+        if isHeading(line) { return true }
+        let text = line.text
+        if text.hasSuffix(":") && text.count <= 40 && !text.dropLast().contains(":") { return true }
+        switch section {
+        case .ingredients:
+            // "For the tadka", or a bare name after a blank line that heads a group ("Chicken").
+            if Rx.test("^for (?:the )?\\w", text), looksLikeLabel(text) { return true }
+            return startsGroup(line, next: next)
+        case .none:
+            switch ingredientLineKind(text) {
+            case .amount, .note:
+                return false
+            case .name:
+                // "Sauce" / "Chicken" heading a group, but not "Salt" or "Cilantro" inside a list.
+                if startsGroup(line, next: next) { return true }
+                if let previous, !line.followsBlank, ingredientLineKind(previous.text) != nil { return false }
+                if let next, ingredientLineKind(next) != nil { return false }
+                return isSectionLabel(text, next: next)
+            case nil:
+                return isSectionLabel(text, next: next)
+            }
+        case .method, .notes:
+            return isSectionLabel(text, next: next)
+        }
+    }
+
+    /// A short bare line after a blank line, followed by an ingredient line with an amount:
+    /// "Chicken" heading its group. "Salt" inside a list (no blank before it) stays an ingredient.
+    static func startsGroup(_ line: Line, next: String?) -> Bool {
+        guard line.followsBlank, looksLikeLabel(line.text), let next,
+              ingredientLineKind(line.text) != .amount, ingredientLineKind(line.text) != .note else { return false }
+        return ingredientLineKind(next) == .amount
+    }
+
+    /// The labelled block (between headings or labels) holding line `index` consists only of
+    /// ingredient lines: "**Sauce**\n- 2 tbsp soy sauce\n- 1 tsp sugar" after some steps.
+    static func blockIsAllIngredients(_ body: [Line], around index: Int) -> Bool {
+        func isBoundary(_ k: Int) -> Bool {
+            let line = body[k]
+            return !line.isListItem && (isHeading(line) || sectionKind(line.text) != nil
+                || (line.text.hasSuffix(":") && line.text.count <= 40))
+        }
+        var start = index
+        while start > 0, !isBoundary(start - 1) { start -= 1 }
+        var end = index
+        while end + 1 < body.count, !isBoundary(end + 1) { end += 1 }
+        guard start > 0 || end + 1 < body.count, end > start else { return false }
+        return body[start...end].allSatisfy { ingredientLineKind($0.text) != nil }
     }
 
     /// A short markdown heading ("**Prep first**", "## Cook"), not a sentence.
@@ -99,14 +271,80 @@ public enum StepStyleParser {
             && !Rx.test("[.!?]$", line.text)
     }
 
+    /// A sentence or chat rather than a title: two sentences, a long sentence, or commentary.
+    static func isProse(_ text: String) -> Bool {
+        if text.count > 80 || PasteProse.sentences(text).count >= 2 { return true }
+        if Rx.test("[.!?]$", text) && text.split(separator: " ").count > 6 { return true }
+        return PasteProse.classify(text) == .commentary
+    }
+
+    /// Starts with a cooking verb, has a "Label: sentence" shape, or holds more than one sentence.
+    static func readsLikeInstruction(_ text: String) -> Bool {
+        PasteProse.startsLikeInstruction(text) || Rx.test(labelledStep, text) || PasteProse.sentences(text).count >= 2
+    }
+
+    /// "Toast: Dry pan, medium-low heat." A short label, a colon, then the instruction.
+    static let labelledStep = "^[\\p{L}][\\p{L}' -]{0,30}:\\s+\\S"
+
+    // MARK: Ingredient lines
+
+    enum IngredientLineKind: Hashable { case amount, note, name }
+
+    static let ingredientNoteTail = "\\b(?:to taste|to garnish|for garnish(?:ing)?|to serve|for serving|as needed|as required|optional|to finish)\\b"
+    static let looseAmount = "^(?:a (?:few|couple(?: of)?|handful|pinch|dash|splash|sprig|bunch|knob|drizzle|little)|handful|pinch|dash|splash|juice of|zest of|some)\\b"
+
+    /// How a line reads as an ingredient line, or nil when it doesn't: `.amount` "1 lb (450 g)
+    /// bone-in chicken", "Scant 1 tsp turmeric", "a handful of cilantro"; `.note` "Salt to taste",
+    /// "Cilantro to garnish"; `.name` a catalog ingredient and nothing more ("Cilantro"). Never a
+    /// line that starts with a cooking verb, has a "Label: …" shape, holds more than one sentence,
+    /// a duration or a temperature.
+    static func ingredientLineKind(_ text: String, catalog: IngredientCatalog = .shared) -> IngredientLineKind? {
+        let words = text.split(separator: " ")
+        guard text.count <= 90, words.count <= 14, !Rx.test("[.!?]\\s+\\S", text), !Rx.test("[!?]$", text),
+              !Rx.test(labelledStep, text), !text.contains("°"), !PasteProse.startsLikeInstruction(text),
+              !Rx.test("\\d\\s*(?:min|mins|minutes?|secs?|seconds?|hours?|hrs?)\\b", text),
+              !Rx.test("^(?:with|in|on|at|until|then|and|or|it|this|that|they|you|i|we)\\b", text) else { return nil }
+        let ing = IngredientLineParser.parse(text)
+        if ing.quantity != nil, StepIngredientExtractor.isPlausibleName(ing.name), ing.name.rangeOfCharacter(from: .letters) != nil {
+            return .amount
+        }
+        if Rx.test(looseAmount, text) { return .amount }
+        let nameWords = ing.name.split(separator: " ").count
+        if nameWords <= 4, let note = ing.note, Rx.test(ingredientNoteTail, note) || Rx.test(ingredientNoteTail, text) {
+            return .note
+        }
+        if nameWords <= 4, words.count <= 6, catalog.exactMatch(ing.name) != nil { return .name }
+        return nil
+    }
+
+    /// A step that is really an ingredient line ("1 tsp cumin seeds", "Cilantro to garnish").
+    public static func isBareIngredientLine(_ text: String) -> Bool {
+        ingredientLineKind(StepStyleParser.cleanMarkdown(text)) != nil
+    }
+
+    /// Steps that look like a pasted ingredient list rather than a method: at least two such
+    /// lines, or a quarter of them.
+    public static func stepsLookLikeIngredients(_ steps: [String]) -> Bool {
+        let bare = steps.filter(isBareIngredientLine).count
+        return bare >= 2 || (bare > 0 && Double(bare) / Double(max(steps.count, 1)) >= 0.25)
+    }
+
+    // MARK: Title
+
     /// "Mongolian Ground Beef (serves 4)" → ("Mongolian Ground Beef", 4). Also "– serves 4",
     /// "(Serves 4–6)" (the lower number), "[makes 12]".
     public static func titleAndServings(_ line: String) -> (title: String, servings: Int?) {
+        let parsed = titleAndServingsRange(line)
+        return (parsed.title, parsed.servings?.0)
+    }
+
+    static func titleAndServingsRange(_ line: String) -> (title: String, servings: (Int, ClosedRange<Int>?)?) {
         let text = cleanMarkdown(line)
-        let pattern = "\\s*(?:[-–—,:|]\\s*)?[(\\[]?\\s*(?:serves|servings?|makes|yield|feeds)\\s*:?\\s*(\\d+)\\b[^)\\]]*[)\\]]?\\s*$"
-        if let m = Rx.firstMatch(pattern, in: text) {
+        let pattern = "\\s*(?:[-–—,:|]\\s*)?[(\\[]?\\s*(?:serves|servings?|makes|yield|feeds)\\s*:?\\s*(\\d+)\\b(?:\\s*[-–—]\\s*(\\d+))?[^)\\]]*[)\\]]?\\s*$"
+        if let m = Rx.firstMatch(pattern, in: text), let low = Int(m[1]!) {
             let title = String(text.dropLast(m[0]!.count)).trimmingCharacters(in: CharacterSet(charactersIn: " -–—,:|"))
-            return (title, Int(m[1]!))
+            let high = m[2].flatMap(Int.init)
+            return (title, (low, high.flatMap { $0 > low ? low...$0 : nil }))
         }
         return (text, nil)
     }
@@ -128,10 +366,12 @@ public enum StepStyleParser {
             && text.rangeOfCharacter(from: CharacterSet.decimalDigits.union(CharacterSet(charactersIn: "½⅓⅔¼¾⅛"))) == nil
     }
 
-    /// Markdown that chat apps add when copied: "## Sauce", "**Cook**", "- step".
+    /// Markdown that chat apps add when copied: "## Sauce", "**Cook**", "*Chicken:*", "- step".
     static func cleanMarkdown(_ text: String) -> String {
         var s = text.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "__", with: "")
         s = Rx.replace("^#{1,6}\\s*", in: s, with: "")
+        // Single-asterisk italics ("*Pepper masala:*"), but not a "* " bullet.
+        s = Rx.replace("(?<![\\w*])\\*(?=\\S)([^*]+?)(?<=\\S)\\*(?![\\w*])", in: s, with: "$1")
         return s.collapsedWhitespace
     }
 }

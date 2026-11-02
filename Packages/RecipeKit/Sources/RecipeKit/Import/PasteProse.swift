@@ -106,5 +106,9 @@ public enum PasteProse {
         "^(?:enjoy|happy cooking|hope|good luck|bon app|let me know|here(?:'s| is| are)|here’s|sure|great question|okay|ok)\\b",
         "\\b(?:let me know|hope (?:this|that|it|you))\\b",
         "\\b(?:compared (?:to|with)|than (?:before|last time)|last time)\\b",
+        // How this version relates to the one discussed: "roughly 90% of the original", "Small tweaks only."
+        "\\b(?:of|than|from|vs\\.?|versus) the original\\b",
+        "^(?:small|minor|just|only|a few) (?:small |minor )?(?:tweaks?|changes?|adjustments?)\\b",
+        "\\b(?:tweaks?|changes?) only\\b",
     ]
 }

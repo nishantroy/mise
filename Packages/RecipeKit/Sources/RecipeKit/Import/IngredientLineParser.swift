@@ -33,9 +33,16 @@ public enum IngredientLineParser {
         notes += parens
         s = withoutParens.collapsedWhitespace
 
+        // "Scant 1 tsp", "heaped 2 tbsp": kept as the first note, since it changes the amount.
+        var qualifier: String?
+        if let m = Rx.firstMatch("^(scant|heaped|heaping|generous|rounded|level)\\s+(?=\\d)", in: s) {
+            qualifier = m[1]!.lowercased()
+            s = String(s.dropFirst(m[0]!.count))
+        }
+
         // Quantity, including ranges ("1-2", "2 to 3": take the upper bound).
         var quantity: Double?
-        if let m = Rx.firstMatch("^(?:about|approx\\.?|approximately|~|scant|heaped)?\\s*(\(number))(?:\\s*(?:-|to)\\s*(\(number)))?(?![\\d/])", in: s) {
+        if let m = Rx.firstMatch("^(?:about|approx\\.?|approximately|~)?\\s*(\(number))(?:\\s*(?:-|to)\\s*(\(number)))?(?![\\d/])", in: s) {
             let lower = value(of: m[1]!)
             let upper = m[2].flatMap(value(of:))
             if let lower, let upper, upper < lower {
@@ -80,11 +87,12 @@ public enum IngredientLineParser {
         let commaNote = segments.filter { !$0.isEmpty }.joined(separator: ", ")
 
         // Trailing phrases that are really notes.
-        if let m = Rx.firstMatch("\\s+((?:to taste|as needed|as required|to serve|optional|for (?:garnish|garnishing|serving|frying|greasing|dusting|the [a-z]+)|plus (?:more|extra|a little|some).*)(?:\\s+.*)?)$", in: name) {
+        if let m = Rx.firstMatch("\\s+((?:to taste|as needed|as required|to serve|to garnish|to finish|optional|for (?:garnish|garnishing|serving|frying|greasing|dusting|the [a-z]+)|plus (?:more|extra|a little|some).*)(?:\\s+.*)?)$", in: name) {
             notes.insert(m[1]!, at: 0)
             name = String(name.dropLast(m[0]!.count))
         }
         if !commaNote.isEmpty { notes.insert(commaNote, at: 0) }
+        if let qualifier { notes.insert(qualifier, at: 0) }
 
         name = name.trimmingCharacters(in: CharacterSet(charactersIn: " ,;:-–")).collapsedWhitespace
         if name.isEmpty { name = raw }
