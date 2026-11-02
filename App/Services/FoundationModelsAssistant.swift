@@ -150,9 +150,21 @@ struct FoundationModelsAssistant: RecipeAssistant {
 
     var displayName: String { "Apple Intelligence" }
 
+    /// The rules own feedback about steps (their rewrites, removals and step notes are always
+    /// kept, after the model's edits); the model only sees the rest of the feedback, so it
+    /// doesn't repeat a step change as a note.
     func proposeEdits(recipe: Recipe, feedback: String, prefs: UserPreferences) async throws -> [RecipeEdit] {
-        let hints = (try? await rules.proposeEdits(recipe: recipe, feedback: feedback, prefs: prefs)) ?? []
-        guard SystemLanguageModel.default.isAvailable else { return hints }
+        let analysis = FeedbackParser().analyse(feedback, recipe: recipe)
+        let stepEdits = analysis.stepChanges.map(\.edit)
+        let hints = analysis.edits.filter { !stepEdits.contains($0) }
+        guard SystemLanguageModel.default.isAvailable,
+              !analysis.otherFeedback.trimmingCharacters(in: .whitespaces).isEmpty else { return analysis.edits }
+        let ingredientEdits = await modelEdits(recipe: recipe, feedback: analysis.otherFeedback, hints: hints)
+        return ingredientEdits + stepEdits.filter { !ingredientEdits.contains($0) }
+    }
+
+    /// Ingredient edits and notes from the model, or `hints` (the rules') on any error.
+    private func modelEdits(recipe: Recipe, feedback: String, hints: [RecipeEdit]) async -> [RecipeEdit] {
         let prompt = Self.editPrompt(recipe: recipe, feedback: feedback, hints: hints)
         do {
             let session = LanguageModelSession(instructions: Self.editInstructions)
@@ -348,21 +360,28 @@ struct FoundationModelsAssistant: RecipeAssistant {
 
     /// Single-step rewrites for what `StepRewrites.requests` finds (at most two). Each answer is
     /// validated in RecipeKit and dropped if it fails; errors drop it too.
+    ///
+    /// Feedback about a step that the rules could only note ("did it in the oven at 200°C") is
+    /// also sent, with the step and its neighbours; a valid rewrite replaces that note.
     func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String) async throws -> [StepRewriteProposal] {
-        let requests = StepRewrites.requests(recipe: recipe, edits: edits)
+        let requests = StepRewrites.feedbackRequests(recipe: recipe, edits: edits, feedback: feedback)
+            + StepRewrites.requests(recipe: recipe, edits: edits)
         guard !requests.isEmpty, SystemLanguageModel.default.isAvailable else { return [] }
         let after = recipe.applying(edits)
         var out: [StepRewriteProposal] = []
         for request in requests {
-            let prompt = Self.rewritePrompt(request, after: after, feedback: feedback)
+            let isFeedback = if case .feedback = request.kind { true } else { false }
+            let prompt = isFeedback ? Self.feedbackRewritePrompt(request, recipe: recipe) : Self.rewritePrompt(request, after: after, feedback: feedback)
             do {
                 let answer = try await Self.withTimeout(Self.insightTimeout) {
-                    let session = LanguageModelSession(instructions: Self.rewriteInstructions)
+                    let session = LanguageModelSession(instructions: isFeedback ? Self.feedbackRewriteInstructions : Self.rewriteInstructions)
                     return try await session.respond(to: prompt, generating: GeneratedStepRewrite.self,
                                                      options: GenerationOptions(temperature: 0.2)).content
                 }
-                let proposal = StepRewrites.proposal(for: request, stepNumber: answer.stepNumber, text: answer.text,
-                                                     recipe: recipe, edits: edits)
+                let proposal = isFeedback
+                    ? StepRewrites.feedbackProposal(for: request, text: answer.text, recipe: recipe)
+                    : StepRewrites.proposal(for: request, stepNumber: answer.stepNumber, text: answer.text,
+                                            recipe: recipe, edits: edits)
                 Self.debugLog("rewriteStep", prompt: prompt, output: "\(answer) → \(proposal == nil ? "rejected" : "kept")")
                 if let proposal, !out.contains(where: { $0.stepIndex == proposal.stepIndex }) { out.append(proposal) }
             } catch {
@@ -378,8 +397,32 @@ struct FoundationModelsAssistant: RecipeAssistant {
     Keep it about as long as the original and don't add new instructions.
     """
 
+    static let feedbackRewriteInstructions = """
+    You update one step of a home cook's recipe to match what they actually did. \
+    Change only what their feedback is about and keep the rest of the step word for word, including any label before a colon. \
+    Use only numbers, times and temperatures that are in the step or in the feedback. \
+    Don't add ingredients, don't merge or split steps, and write one short paragraph.
+    """
+
+    /// The step, its neighbours (for context only) and the cook's words.
+    static func feedbackRewritePrompt(_ request: StepRewriteRequest, recipe: Recipe) -> String {
+        guard case let .feedback(clause) = request.kind, let index = request.stepIndex else { return "" }
+        let around = (max(0, index - 1)...min(recipe.steps.count - 1, index + 1))
+            .map { "\($0 + 1). \(String(recipe.steps[$0].prefix(240)))" }.joined(separator: "\n")
+        return """
+        Steps around it:
+        \(around)
+
+        Step to rewrite: \(index + 1)
+        Cook's feedback: \(clause)
+        Rewrite step \(index + 1) so it says what the cook did.
+        """
+    }
+
     static func rewritePrompt(_ request: StepRewriteRequest, after: Recipe, feedback: String) -> String {
         switch request.kind {
+        case .feedback:
+            return ""
         case let .added(ingredient):
             let steps = after.steps.prefix(12).enumerated()
                 .map { "\($0.offset + 1). \(String($0.element.prefix(200)))" }.joined(separator: "\n")
