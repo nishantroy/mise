@@ -264,6 +264,18 @@ struct PepperChickenDiffTests {
         #expect(RecipeDiff.compare(current: original, mine: pasted.recipe, servingsRange: pasted.servingsRange).servings == 3)
     }
 
+    /// "Reset to original" restores the imported recipe, which still has the fennel seeds the
+    /// ingredient check swapped at import. Re-pasting then offers the swap again.
+    @Test func afterResetToTheImportedRecipe() throws {
+        var imported = PepperChicken.original()
+        let cumin = try #require(imported.ingredients.firstIndex { $0.name == "cumin seeds" })
+        imported.ingredients[cumin] = IngredientCatalog.shared.annotate(IngredientLineParser.parse("1 tsp fennel seeds"))
+        let pasted = try #require(RecipeImporter.parsePasted(text: Fixture.text("pepper-chicken-my-version")))
+        let diff = RecipeDiff.compare(current: imported, mine: pasted.recipe, servingsRange: pasted.servingsRange)
+        #expect(diff.edits.map { $0.summary(in: imported) } == ["Swapped fennel seeds for cumin seeds"] + Self.expectedEdits)
+        #expect(diff.pantryUpdates.map(\.summary).first == "Pantry: Fennel seeds → don't have")
+    }
+
     /// The shape the device saved: the ingredient list as the first 14 steps.
     @Test func neverProposesAnIngredientListAsSteps() throws {
         let original = PepperChicken.original()

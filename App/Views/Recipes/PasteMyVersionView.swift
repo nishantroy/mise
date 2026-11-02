@@ -115,6 +115,15 @@ struct PasteMyVersionView: View {
                                    isOn: Binding(get: { proposals.indices.contains(index) && proposals[index].included },
                                                  set: { if proposals.indices.contains(index) { proposals[index].included = $0 } }),
                                    identifier: "myVersion.edit.\(index)")
+                    if case let .replaceSteps(steps) = proposal.edit {
+                        stepsPreview(steps)
+                    }
+                }
+                if let warning = diff.stepsWarning {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .font(Theme.Fonts.meta)
+                        .foregroundStyle(Color.mise.conflict)
+                        .accessibilityIdentifier("myVersion.stepsWarning")
                 }
                 if let servings = diff.servings {
                     ProposalToggle(text: "Serves \(servings)" + (saved.recipe.servings.map { " (was \($0))" } ?? ""),
@@ -143,6 +152,25 @@ struct PasteMyVersionView: View {
         .accessibilityIdentifier("myVersion.changes")
     }
 
+    /// The first few of the new steps under "Use your steps (N steps)", so a bad parse (an
+    /// ingredient list read as steps) shows before saving.
+    private func stepsPreview(_ steps: [String]) -> some View {
+        let shown = steps.prefix(3)
+        return VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+            ForEach(Array(shown.enumerated()), id: \.offset) { offset, step in
+                Text("\(offset + 1). \(step)").lineLimit(2)
+            }
+            if steps.count > shown.count {
+                Text("…and \(steps.count - shown.count) more, ending “\(steps[steps.count - 1])”").lineLimit(2)
+            }
+        }
+        .font(Theme.Fonts.caption)
+        .foregroundStyle(Color.mise.inkSecondary)
+        .padding(.leading, Theme.Spacing.s)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("myVersion.stepsPreview")
+    }
+
     // MARK: Actions
 
     private func compare() {
@@ -155,12 +183,13 @@ struct PasteMyVersionView: View {
         let assistant = provider.assistant
         Task {
             defer { isComparing = false }
-            guard let mine = await PastedRecipes.parse(pasted, assistant: assistant) else {
+            guard let parsed = await PastedRecipes.parsePasted(pasted, assistant: assistant) else {
                 diff = nil
                 errorMessage = "Couldn't read a recipe in that text. Put amounts in the steps (\"1 tbsp soy sauce\"), or use an \"Ingredients\" heading and a \"Method\" heading."
                 return
             }
-            let result = RecipeDiff.compare(current: current, mine: mine, pantry: pantrySnapshot)
+            let result = RecipeDiff.compare(current: current, mine: parsed.recipe, pantry: pantrySnapshot,
+                                            servingsRange: parsed.servingsRange)
             proposals = result.edits.map { EditProposal(edit: $0, summary: $0.summary(in: current)) }
             pantry = result.pantryUpdates.map { PantryProposal(update: $0) }
             useTitle = false
