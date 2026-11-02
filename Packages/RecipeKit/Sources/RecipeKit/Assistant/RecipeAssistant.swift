@@ -1,10 +1,19 @@
 import Foundation
 
+/// What free-text feedback is: a report of a cook ("I made this": "I used less oil") or
+/// instructions for the saved recipe ("Change recipe": "use less oil"). The rules read both the
+/// same way; a model is told which it is.
+public enum FeedbackKind: String, Hashable, Sendable {
+    case cooked, change
+}
+
 /// The seam between the app and whatever produces edits and swaps: rules today, the
 /// on-device model when available, a cloud model later.
 public protocol RecipeAssistant: Sendable {
     var displayName: String { get }
     func proposeEdits(recipe: Recipe, feedback: String, prefs: UserPreferences) async throws -> [RecipeEdit]
+    /// `proposeEdits` for either kind of feedback. Defaults to the one above.
+    func proposeEdits(recipe: Recipe, feedback: String, kind: FeedbackKind, prefs: UserPreferences) async throws -> [RecipeEdit]
     func suggestSwaps(for ingredient: Ingredient, in recipe: Recipe,
                       pantry: PantrySnapshot, prefs: UserPreferences) async throws -> [SwapSuggestion]
     /// A cuisine from `CuisineGuesser.vocabulary`, or nil when there's no clear answer.
@@ -24,12 +33,22 @@ public protocol RecipeAssistant: Sendable {
     /// swap that left a step awkward), validated by `StepRewrites`. Offered unticked. The rules
     /// have none.
     func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String) async throws -> [StepRewriteProposal]
+    /// `proposeStepRewrites` for either kind of feedback. Defaults to the one above.
+    func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String, kind: FeedbackKind) async throws -> [StepRewriteProposal]
     /// "What can I cook?": the question as a structured query. A model's reading must go through
     /// `CookQueryMerge.merge` with the rules' parse, so it can only add grounded terms.
     func parseCookQuery(text: String) async throws -> CookQuery
 }
 
 extension RecipeAssistant {
+    public func proposeEdits(recipe: Recipe, feedback: String, kind: FeedbackKind, prefs: UserPreferences) async throws -> [RecipeEdit] {
+        try await proposeEdits(recipe: recipe, feedback: feedback, prefs: prefs)
+    }
+
+    public func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String, kind: FeedbackKind) async throws -> [StepRewriteProposal] {
+        try await proposeStepRewrites(recipe: recipe, edits: edits, feedback: feedback)
+    }
+
     /// Default: the rules, so every assistant can answer.
     public func guessCuisine(recipe: Recipe) async throws -> String? {
         CuisineGuesser().guess(recipe)

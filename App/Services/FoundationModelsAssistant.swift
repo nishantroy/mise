@@ -154,20 +154,25 @@ struct FoundationModelsAssistant: RecipeAssistant {
     /// kept, after the model's edits); the model only sees the rest of the feedback, so it
     /// doesn't repeat a step change as a note.
     func proposeEdits(recipe: Recipe, feedback: String, prefs: UserPreferences) async throws -> [RecipeEdit] {
+        try await proposeEdits(recipe: recipe, feedback: feedback, kind: .cooked, prefs: prefs)
+    }
+
+    /// "Change recipe" sends the same text, told that it is an instruction, not a report.
+    func proposeEdits(recipe: Recipe, feedback: String, kind: FeedbackKind, prefs: UserPreferences) async throws -> [RecipeEdit] {
         let analysis = FeedbackParser().analyse(feedback, recipe: recipe)
         let stepEdits = analysis.stepChanges.map(\.edit)
         let hints = analysis.edits.filter { !stepEdits.contains($0) }
         guard SystemLanguageModel.default.isAvailable,
               !analysis.otherFeedback.trimmingCharacters(in: .whitespaces).isEmpty else { return analysis.edits }
-        let ingredientEdits = await modelEdits(recipe: recipe, feedback: analysis.otherFeedback, hints: hints)
+        let ingredientEdits = await modelEdits(recipe: recipe, feedback: analysis.otherFeedback, hints: hints, kind: kind)
         return ingredientEdits + stepEdits.filter { !ingredientEdits.contains($0) }
     }
 
     /// Ingredient edits and notes from the model, or `hints` (the rules') on any error.
-    private func modelEdits(recipe: Recipe, feedback: String, hints: [RecipeEdit]) async -> [RecipeEdit] {
-        let prompt = Self.editPrompt(recipe: recipe, feedback: feedback, hints: hints)
+    private func modelEdits(recipe: Recipe, feedback: String, hints: [RecipeEdit], kind: FeedbackKind) async -> [RecipeEdit] {
+        let prompt = Self.editPrompt(recipe: recipe, feedback: feedback, hints: hints, kind: kind)
         do {
-            let session = LanguageModelSession(instructions: Self.editInstructions)
+            let session = LanguageModelSession(instructions: kind == .change ? Self.changeInstructions : Self.editInstructions)
             let response = try await session.respond(to: prompt, generating: EditPlan.self,
                                                      options: GenerationOptions(temperature: 0.2))
             Self.debugLog("proposeEdits", prompt: prompt, output: "\(response.content)")
@@ -364,6 +369,10 @@ struct FoundationModelsAssistant: RecipeAssistant {
     /// Feedback about a step that the rules could only note ("did it in the oven at 200°C") is
     /// also sent, with the step and its neighbours; a valid rewrite replaces that note.
     func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String) async throws -> [StepRewriteProposal] {
+        try await proposeStepRewrites(recipe: recipe, edits: edits, feedback: feedback, kind: .cooked)
+    }
+
+    func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String, kind: FeedbackKind) async throws -> [StepRewriteProposal] {
         let requests = StepRewrites.feedbackRequests(recipe: recipe, edits: edits, feedback: feedback)
             + StepRewrites.requests(recipe: recipe, edits: edits)
         guard !requests.isEmpty, SystemLanguageModel.default.isAvailable else { return [] }
@@ -371,10 +380,13 @@ struct FoundationModelsAssistant: RecipeAssistant {
         var out: [StepRewriteProposal] = []
         for request in requests {
             let isFeedback = if case .feedback = request.kind { true } else { false }
-            let prompt = isFeedback ? Self.feedbackRewritePrompt(request, recipe: recipe) : Self.rewritePrompt(request, after: after, feedback: feedback)
+            let prompt = isFeedback ? Self.feedbackRewritePrompt(request, recipe: recipe, kind: kind)
+                : Self.rewritePrompt(request, after: after, feedback: feedback, kind: kind)
+            let instructions = !isFeedback ? Self.rewriteInstructions
+                : kind == .change ? Self.changeRewriteInstructions : Self.feedbackRewriteInstructions
             do {
                 let answer = try await Self.withTimeout(Self.insightTimeout) {
-                    let session = LanguageModelSession(instructions: isFeedback ? Self.feedbackRewriteInstructions : Self.rewriteInstructions)
+                    let session = LanguageModelSession(instructions: instructions)
                     return try await session.respond(to: prompt, generating: GeneratedStepRewrite.self,
                                                      options: GenerationOptions(temperature: 0.2)).content
                 }
@@ -404,22 +416,33 @@ struct FoundationModelsAssistant: RecipeAssistant {
     Don't add ingredients, don't merge or split steps, and write one short paragraph.
     """
 
+    static let changeRewriteInstructions = """
+    You update one step of a home cook's recipe to make a change they ask for. \
+    Their words are an instruction for the recipe from now on, not a report of what happened. \
+    Change only what the instruction is about and keep the rest of the step word for word, including any label before a colon. \
+    Use only numbers, times and temperatures that are in the step or in the instruction. \
+    Don't add ingredients, don't merge or split steps, and write one short paragraph.
+    """
+
     /// The step, its neighbours (for context only) and the cook's words.
-    static func feedbackRewritePrompt(_ request: StepRewriteRequest, recipe: Recipe) -> String {
+    static func feedbackRewritePrompt(_ request: StepRewriteRequest, recipe: Recipe, kind: FeedbackKind = .cooked) -> String {
         guard case let .feedback(clause) = request.kind, let index = request.stepIndex else { return "" }
         let around = (max(0, index - 1)...min(recipe.steps.count - 1, index + 1))
             .map { "\($0 + 1). \(String(recipe.steps[$0].prefix(240)))" }.joined(separator: "\n")
+        let ask = kind == .change
+            ? "Cook's instruction: \(clause)\nRewrite step \(index + 1) so it makes this change."
+            : "Cook's feedback: \(clause)\nRewrite step \(index + 1) so it says what the cook did."
         return """
         Steps around it:
         \(around)
 
         Step to rewrite: \(index + 1)
-        Cook's feedback: \(clause)
-        Rewrite step \(index + 1) so it says what the cook did.
+        \(ask)
         """
     }
 
-    static func rewritePrompt(_ request: StepRewriteRequest, after: Recipe, feedback: String) -> String {
+    static func rewritePrompt(_ request: StepRewriteRequest, after: Recipe, feedback: String, kind: FeedbackKind = .cooked) -> String {
+        let label = kind == .change ? "Cook's instruction" : "Cook's feedback"
         switch request.kind {
         case .feedback:
             return ""
@@ -431,7 +454,7 @@ struct FoundationModelsAssistant: RecipeAssistant {
             \(steps)
 
             New ingredient: \(ingredient.displayText)
-            Cook's feedback: \(feedback.isEmpty ? "(none)" : feedback)
+            \(label): \(feedback.isEmpty ? "(none)" : feedback)
             Pick the one step where the new ingredient is used and rewrite that step so it mentions \(ingredient.name).
             """
         case let .replaced(oldNames, newName):
@@ -528,12 +551,24 @@ struct FoundationModelsAssistant: RecipeAssistant {
     Suggested changes from a simple rule engine are included; keep the good ones, fix wrong ones, and add what they missed.
     """
 
+    /// "Change recipe": the same edit kinds, for instructions rather than a report of a cook.
+    static let changeInstructions = """
+    You update a home cook's saved recipe to make changes they ask for. \
+    Their words are instructions for the recipe from now on ("use less oil", "swap the sherry for mirin", "no cilantro"), \
+    or a complaint to fix ("it's usually too salty"); they are not describing a cook. \
+    Propose small, concrete changes using only these kinds: \
+    replace (swap one listed ingredient for another), scale (change a listed ingredient's amount by a factor), \
+    remove (drop a listed ingredient), add (a new ingredient), note (a short tip to keep with the recipe). \
+    Use ingredient names exactly as listed. Make only the changes asked for. \
+    Suggested changes from a simple rule engine are included; keep the good ones, fix wrong ones, and add what they missed.
+    """
+
     static let swapInstructions = """
     You suggest substitutes for one ingredient a home cook doesn't have. \
     Prefer things from their pantry. Respect their diet and things they avoid. Keep tips short.
     """
 
-    static func editPrompt(recipe: Recipe, feedback: String, hints: [RecipeEdit]) -> String {
+    static func editPrompt(recipe: Recipe, feedback: String, hints: [RecipeEdit], kind: FeedbackKind = .cooked) -> String {
         let ingredients = recipe.ingredients.prefix(30).map { "- \($0.displayText)" }.joined(separator: "\n")
         let steps = recipe.steps.prefix(10).enumerated()
             .map { "\($0.offset + 1). \(String($0.element.prefix(160)))" }.joined(separator: "\n")
@@ -545,7 +580,7 @@ struct FoundationModelsAssistant: RecipeAssistant {
         Steps:
         \(steps)
 
-        Cook's feedback: \(feedback)
+        \(kind == .change ? "Changes the cook asks for" : "Cook's feedback"): \(feedback)
 
         Rule engine suggestions:
         \(hintText)
