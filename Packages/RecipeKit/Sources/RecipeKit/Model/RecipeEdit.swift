@@ -18,6 +18,11 @@ public enum RecipeEdit: Codable, Hashable, Sendable {
     /// `reason` on a `replaceIngredient` that only changes the amount (the user's version uses a
     /// different unit, so it can't be a scale). The summary reads "Change X: ¼ cup → 1 tbsp".
     public static let amountChangeReason = "Amount from your version"
+
+    /// `reason` on a `replaceIngredient` where the user's line takes the same role in another form
+    /// (2 tbsp black pepper → 1¾ tbsp black peppercorns). The summary reads
+    /// "Change black pepper (2 tbsp) to 1 ¾ tbsp black peppercorns".
+    public static let versionLineReason = "Line from your version"
 }
 
 /// One saved change set: what the user accepted, when, and a human summary.

@@ -30,10 +30,13 @@ public struct PantryUpdate: Hashable, Sendable, Identifiable {
 /// Ingredients are matched by catalog ID, then by normalised name. Of what's left, a removed
 /// ingredient and an added one become a single replace when a catalog entry stands in for
 /// several (`replaces`: ginger + garlic → ginger garlic paste) or when the swaps table pairs
-/// them (Shaoxing wine → dry sherry). Matched ingredients whose amount differs by at least
-/// `scaleThreshold` become a scale (same unit) or an amount change (different units). Everything
-/// else is a remove or an add, and the user's steps replace the old ones in one edit. Notes the
-/// recipe doesn't have yet become `addNote` edits.
+/// them (Shaoxing wine → dry sherry). Matched ingredients whose amount differs as written become
+/// a scale (same unit) or an amount change (different units, a size word "large" → "medium", or
+/// a qualifier "scant"); a whole spice for a ground one (black pepper → black peppercorns) is a
+/// replace by the user's line. Everything else is a remove or an add, and the user's steps
+/// replace the old ones in one edit, unless they look like an ingredient list (then the old
+/// steps stay and `stepsWarning` says why). Notes the recipe doesn't have yet become `addNote`
+/// edits.
 public struct RecipeDiff: Hashable, Sendable {
     /// In display order: replaces, removes, amount changes, adds, the steps, then new notes.
     public var edits: [RecipeEdit]
@@ -42,18 +45,30 @@ public struct RecipeDiff: Hashable, Sendable {
     public var title: String?
     /// The user's servings, when given and different.
     public var servings: Int?
+    /// Set when the user's steps weren't proposed because they look like ingredient lines (a
+    /// paste whose ingredient list ended up in the method).
+    public var stepsWarning: String?
 
-    /// Amount differences smaller than this (relative) are ignored: 15%.
-    public static let scaleThreshold = 0.15
+    /// Same-unit amounts closer than this (relative) are the same amount. The cook wrote what they
+    /// used, so any real difference is offered: 2 → 1¾ tbsp is a change. (Was 15%, which hid
+    /// most of a "90% of the original" version.)
+    public static let scaleThreshold = 0.005
+    /// Amounts in different units closer than this are the same amount converted (1 cup / 240 ml).
+    public static let conversionThreshold = 0.03
 
-    public init(edits: [RecipeEdit], pantryUpdates: [PantryUpdate], title: String?, servings: Int?) {
+    public init(edits: [RecipeEdit], pantryUpdates: [PantryUpdate], title: String?, servings: Int?,
+                stepsWarning: String? = nil) {
         self.edits = edits
         self.pantryUpdates = pantryUpdates
         self.title = title
         self.servings = servings
+        self.stepsWarning = stepsWarning
     }
 
+    /// `servingsRange`: the paste said "3–4 servings" (`mine.servings` is 3); a recipe already
+    /// within the range isn't offered a servings change.
     public static func compare(current: Recipe, mine: Recipe, pantry: PantrySnapshot = .empty,
+                               servingsRange: ClosedRange<Int>? = nil,
                                catalog: IngredientCatalog = .shared) -> RecipeDiff {
         let original = annotateMissing(current, catalog: catalog)
         let mine = annotateMissing(mine, catalog: catalog)
@@ -124,8 +139,15 @@ public struct RecipeDiff: Hashable, Sendable {
         let removes = leftOriginal.map { RecipeEdit.removeIngredient(id: $0.id) }
         let adds = leftMine.map { RecipeEdit.addIngredient($0) }
         var edits = replaces.map(\.edit) + removes + amountEdits.sorted(by: { order($0, in: original) < order($1, in: original) }) + adds
+        var stepsWarning: String?
         if !mine.steps.isEmpty && mine.steps != original.steps {
-            edits.append(.replaceSteps(mine.steps))
+            if StepStyleParser.stepsLookLikeIngredients(mine.steps) {
+                // Never replace a method with an ingredient list.
+                let bare = mine.steps.filter(StepStyleParser.isBareIngredientLine)
+                stepsWarning = "Kept the recipe's steps: \(bare.count) of your \(mine.steps.count) steps look like ingredients (“\(bare[0])”). Put your method under a “Steps” heading and compare again."
+            } else {
+                edits.append(.replaceSteps(mine.steps))
+            }
         }
         // Notes in the user's version that the recipe doesn't already have (tips from the paste).
         let existingNotes = Set(original.notes.map { $0.collapsedWhitespace.lowercased() })
@@ -139,31 +161,96 @@ public struct RecipeDiff: Hashable, Sendable {
         // Title and servings: offered separately.
         let myTitle = mine.title.trimmed
         let title = (!myTitle.isEmpty && myTitle != "Untitled recipe" && myTitle.lowercased() != original.title.lowercased()) ? myTitle : nil
-        let servings = (mine.servings != nil && mine.servings != original.servings) ? mine.servings : nil
+        var servings = (mine.servings != nil && mine.servings != original.servings) ? mine.servings : nil
+        if let servingsRange, let current = original.servings, servingsRange.contains(current) { servings = nil }
 
         return RecipeDiff(edits: edits,
                           pantryUpdates: pantryUpdates(swappedOut: replaces.flatMap(\.olds), mine: mine, pantry: pantry, catalog: catalog),
-                          title: title, servings: servings)
+                          title: title, servings: servings, stepsWarning: stepsWarning)
     }
 
     // MARK: Amounts
 
-    /// Scale (same unit) or amount change (different units) when the amounts differ enough.
+    /// Scale (same unit) or amount change (different units, size or qualifier) when the amounts
+    /// differ as written; the user's line when it's the whole form of a ground spice or the reverse.
     static func amountEdit(old: Ingredient, new: Ingredient) -> RecipeEdit? {
+        if isWholeForm(old.name) != isWholeForm(new.name) {
+            var line = new
+            line.catalogID = new.catalogID ?? old.catalogID
+            return .replaceIngredient(id: old.id, with: [line], reason: RecipeEdit.versionLineReason)
+        }
         guard let qo = old.quantity, let qn = new.quantity, qo > 0, qn > 0 else { return nil }
+        let newSize = sizeWord(new.name)
+        let sizeChanged = newSize != nil && newSize != sizeWord(old.name)
+        let qualifierChanged = qualifier(old) != qualifier(new)
         if old.unit == new.unit {
             let factor = qn / qo
-            return abs(factor - 1) >= scaleThreshold ? .scaleIngredient(id: old.id, factor: factor) : nil
+            let differs = abs(factor - 1) > scaleThreshold
+            if !sizeChanged && !qualifierChanged { return differs ? .scaleIngredient(id: old.id, factor: factor) : nil }
+        } else if let bo = baseAmount(qo, old.unit), let bn = baseAmount(qn, new.unit), bo.kind == bn.kind,
+                  abs(bn.value / bo.value - 1) < conversionThreshold, !sizeChanged, !qualifierChanged {
+            return nil
         }
-        if let bo = baseAmount(qo, old.unit), let bn = baseAmount(qn, new.unit), bo.kind == bn.kind {
-            guard abs(bn.value / bo.value - 1) >= scaleThreshold else { return nil }
-        }
-        // Different units: keep the ingredient (name, note, catalog ID), take the user's amount.
+        // Keep the ingredient (name, note, catalog ID); take the user's amount, size, qualifier and
+        // any alternative measure they gave ("1 lb (450 g)").
         var changed = old
         changed.quantity = qn
         changed.unit = new.unit
+        if sizeChanged, let newSize {
+            changed.name = sizeWord(old.name) != nil ? newSize + " " + nameWithoutSize(old.name) : newSize + " " + old.name
+        }
+        var notes = noteSegments(old).filter { $0.lowercased() != qualifier(old) && $0 != measureNote(old) }
+        if let measure = measureNote(new) ?? measureNote(old) { notes.insert(measure, at: 0) }
+        if let q = qualifier(new) { notes.insert(q, at: 0) }
+        changed.note = notes.isEmpty ? nil : notes.joined(separator: ", ")
         changed.raw = changed.displayText
         return .replaceIngredient(id: old.id, with: [changed], reason: RecipeEdit.amountChangeReason)
+    }
+
+    // MARK: Amount wording
+
+    static let sizeWords: Set<String> = ["small", "medium", "large", "big", "extra-large", "jumbo"]
+    static let qualifiers: Set<String> = ["scant", "heaped", "heaping", "generous", "rounded", "level"]
+
+    /// "large" in "large onions".
+    static func sizeWord(_ name: String) -> String? {
+        guard let first = name.split(separator: " ").first.map({ $0.lowercased() }), sizeWords.contains(first) else { return nil }
+        return first
+    }
+
+    /// "large onions" → "onions".
+    public static func nameWithoutSize(_ name: String) -> String {
+        sizeWord(name) == nil ? name : name.split(separator: " ").dropFirst().joined(separator: " ")
+    }
+
+    static func noteSegments(_ ing: Ingredient) -> [String] {
+        (ing.note ?? "").split(separator: ",").map { String($0).trimmed }.filter { !$0.isEmpty }
+    }
+
+    /// "scant": the first note segment, where `IngredientLineParser` puts it.
+    static func qualifier(_ ing: Ingredient) -> String? {
+        noteSegments(ing).first.flatMap { qualifiers.contains($0.lowercased()) ? $0.lowercased() : nil }
+    }
+
+    /// An alternative measure in the note: "450 g", "~270 g".
+    public static func measureNote(_ ing: Ingredient) -> String? {
+        noteSegments(ing).first { Rx.test("^~?\\d+(?:\\.\\d+)?\\s*(?:g|kg|ml|l|oz|lb)$", $0) }
+    }
+
+    /// The amount as the cook would say it: "scant 1 tsp", "2 large", "0.5 kg".
+    public static func amountText(_ ing: Ingredient) -> String? {
+        guard let q = ing.quantity else { return nil }
+        var parts: [String] = []
+        if let qualifier = qualifier(ing) { parts.append(qualifier) }
+        parts.append(QuantityFormatter.string(from: q, unit: ing.unit))
+        if let unit = ing.unit { parts.append(Units.display(unit, quantity: q)) }
+        if let size = sizeWord(ing.name) { parts.append(size) }
+        return parts.joined(separator: " ")
+    }
+
+    /// Peppercorns, cumin seeds, whole cloves: measured differently from the ground spice.
+    static func isWholeForm(_ name: String) -> Bool {
+        Rx.test("\\b(?:peppercorns?|seeds?|whole|pods?)\\b", name)
     }
 
     /// Volume in teaspoons or weight in grams.

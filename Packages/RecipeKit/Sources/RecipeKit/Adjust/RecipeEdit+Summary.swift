@@ -9,9 +9,18 @@ extension RecipeEdit {
             let old = oldIngredient?.name ?? "an ingredient"
             if replacements.isEmpty { return "Leave out \(old)" }
             if reason == RecipeEdit.amountChangeReason, replacements.count == 1, let oldIngredient {
-                let from = Self.amount(oldIngredient) ?? "some"
-                let to = Self.amount(replacements[0]) ?? "some"
-                return "Change \(old): \(from) → \(to)"
+                // "Change onions: 2 large → 2 medium (~270 g)", "Change turmeric: 1 tsp → scant 1 tsp".
+                let new = replacements[0]
+                let from = RecipeDiff.amountText(oldIngredient) ?? "some"
+                var to = RecipeDiff.amountText(new) ?? "some"
+                if let measure = RecipeDiff.measureNote(new), RecipeDiff.measureNote(oldIngredient) != measure {
+                    to += " (\(measure))"
+                }
+                return "Change \(RecipeDiff.nameWithoutSize(oldIngredient.name)): \(from) → \(to)"
+            }
+            if reason == RecipeEdit.versionLineReason, replacements.count == 1, let oldIngredient {
+                let from = Self.amount(oldIngredient).map { " (\($0))" } ?? ""
+                return "Change \(old)\(from) to \(replacements[0].displayText)"
             }
             return "Swapped \(old) for \(replacements.map(\.name).joined(separator: " and "))"
         case let .replaceIngredients(ids, replacements, _):
@@ -42,6 +51,8 @@ extension RecipeEdit {
             if duplicated, let amount = Self.amount(ing) { return "Leave out \(ing.name) (\(amount))" }
             return "Leave out \(ing.name)"
         case let .addIngredient(ing):
+            // "Add ½ tsp cumin seeds (for tempering, optional)": the note says why it's a second line.
+            if let note = ing.note, !note.isEmpty, note.count <= 40 { return "Add \(ing.displayText) (\(note))" }
             return "Add \(ing.displayText)"
         case let .updateStep(index, text):
             return "Step \(index + 1): \(text)"

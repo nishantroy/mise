@@ -198,3 +198,82 @@ struct PepperChickenAssemblyTests {
         #expect(RecipeAssembly.validSteps(["1 tbsp Lao Gan Ma"] + rules.steps, source: rules.steps, prose: []) == nil)
     }
 }
+
+@Suite("Pepper chicken: your version vs the saved recipe")
+struct PepperChickenDiffTests {
+    static let expectedEdits = [
+        "Change chicken: 0.5 kg → 1 lb (450 g)",
+        "Less oil: 3 tbsp → 2 ½ tbsp",
+        "Change onions: 2 large → 2 medium (~270 g)",
+        "Less ginger garlic paste: 2 tbsp → 1 ¾ tbsp",
+        "Change turmeric: 1 tsp → scant 1 tsp",
+        "Less coriander powder: 2 tbsp → 1 ¾ tbsp",
+        "Less garam masala: 2 tsp → 1 ¾ tsp",
+        "Change black pepper (2 tbsp) to 1 ¾ tbsp black peppercorns",
+        "Add ½ tsp cumin seeds (for tempering, optional)",
+        "Use your steps (10 steps)",
+    ]
+
+    @Test(arguments: PepperChicken.fixtures)
+    func proposals(_ name: String) throws {
+        let original = PepperChicken.original()
+        let pasted = try #require(RecipeImporter.parsePasted(text: Fixture.text(name)))
+        let diff = RecipeDiff.compare(current: original, mine: pasted.recipe, servingsRange: pasted.servingsRange)
+        // Cumin 1 tsp, green chillies (3, upper bound of 2–3), curry leaves, lemon juice, salt and
+        // cilantro (= coriander leaves) are unchanged.
+        #expect(diff.edits.map { $0.summary(in: original) } == Self.expectedEdits)
+        #expect(diff.servings == nil)  // 4 is within "3–4 servings"; the titled variants say 4
+        #expect(diff.title == nil)     // the commentary line isn't a title; the others say "Pepper Chicken"
+        #expect(diff.stepsWarning == nil)
+        #expect(diff.pantryUpdates.map(\.summary) == [
+            "Pantry: Curry leaves → have", "Pantry: Ginger garlic paste → have", "Pantry: Garam masala → have",
+        ])
+        guard case let .replaceSteps(steps) = diff.edits.last else { Issue.record("no replaceSteps"); return }
+        #expect(steps == PepperChicken.steps)
+    }
+
+    @Test func applyingEverything() throws {
+        let original = PepperChicken.original()
+        let pasted = try #require(RecipeImporter.parsePasted(text: Fixture.text("pepper-chicken-my-version")))
+        let diff = RecipeDiff.compare(current: original, mine: pasted.recipe, servingsRange: pasted.servingsRange)
+        let applied = original.applying(diff.edits)
+        #expect(applied.ingredients.map(PepperChicken.describe) == [
+            "1|lb|chicken|450 g|chicken",
+            "2 ½|tbsp|oil||neutral-oil",
+            "1|tsp|cumin seeds||cumin-seeds",
+            "2||medium onions|~270 g|onion",
+            "3||green chilli||green-chili",
+            "1|sprig|curry leaves||curry-leaves",
+            "1 ¾|tbsp|ginger garlic paste||ginger-garlic-paste",
+            "1|tsp|turmeric|scant|turmeric",
+            "1 ¾|tbsp|coriander powder||coriander-powder",
+            "1 ¾|tsp|garam masala||garam-masala",
+            "||salt||salt",
+            "1 ¾|tbsp|black peppercorns||black-pepper",
+            "1|tsp|lemon juice||lemon-juice",
+            "||coriander leaves||cilantro",
+            "½|tsp|cumin seeds|for tempering, optional|cumin-seeds",
+        ])
+        #expect(applied.steps == PepperChicken.steps)
+    }
+
+    @Test func aServingsChangeOutsideTheRangeIsStillOffered() throws {
+        var original = PepperChicken.original()
+        original.servings = 6
+        let pasted = try #require(RecipeImporter.parsePasted(text: Fixture.text("pepper-chicken-my-version")))
+        #expect(RecipeDiff.compare(current: original, mine: pasted.recipe, servingsRange: pasted.servingsRange).servings == 3)
+    }
+
+    /// The shape the device saved: the ingredient list as the first 14 steps.
+    @Test func neverProposesAnIngredientListAsSteps() throws {
+        let original = PepperChicken.original()
+        var mine = try #require(RecipeImporter.parsePasted(text: Fixture.text("pepper-chicken-my-version"))).recipe
+        mine.steps = mine.ingredients.map(\.raw) + PepperChicken.steps
+        let diff = RecipeDiff.compare(current: original, mine: mine)
+        #expect(!diff.edits.contains { if case .replaceSteps = $0 { true } else { false } })
+        #expect(diff.stepsWarning?.hasPrefix("Kept the recipe's steps: 15 of your 25 steps look like ingredients") == true)
+        #expect(original.applying(diff.edits).steps == original.steps)
+        // The ingredient edits are still offered.
+        #expect(diff.edits.map { $0.summary(in: original) } == Array(Self.expectedEdits.dropLast()))
+    }
+}

@@ -174,10 +174,10 @@ struct RecipeDiffTests {
             "Less scallions: 4 → 3",
             "Add ½ onion",
             "Add 1 green bell pepper",
-            "Add 2 Fresnos",
-            "Add 1 Thai chili",
+            "Add 2 Fresnos (in rings)",  // short notes are shown with an add
+            "Add 1 Thai chili (optional)",
             "Add 1 handful cilantro",
-            "Add ¼ tsp Sichuan peppercorn",
+            "Add ¼ tsp Sichuan peppercorn (optional)",
             "Add 1 tbsp Lao Gan Ma",
             "Add 1 tsp sesame oil",
             "Add ½ tsp salt",
@@ -258,11 +258,13 @@ struct RecipeDiffTests {
         let mine = recipe(["1.1 tbsp soy sauce", "3 tbsp sugar", "1 tbsp oil", "3 tsp vinegar", "4 scallions", "salt to taste"])
         let diff = RecipeDiff.compare(current: original, mine: mine)
         let sugar = original.ingredients[1].id
-        #expect(diff.edits.count == 2)
-        #expect(diff.edits[0] == .scaleIngredient(id: sugar, factor: 1.5))         // same unit → scale
-        #expect(diff.edits[0].summary(in: original) == "More sugar: 2 tbsp → 3 tbsp")
-        #expect(diff.edits[1].summary(in: original) == "Change oil: ¼ cup → 1 tbsp")  // different units → amount change
-        // Soy sauce +10% (under 15%), vinegar 1 tbsp = 3 tsp, scallions equal, salt without an amount: no edit.
+        // Any written difference in the same unit is offered (was: ≥ 15%, which hid 2 → 1¾ tbsp).
+        #expect(diff.edits.count == 3)
+        #expect(diff.edits[0].summary(in: original) == "More soy sauce: 1 tbsp → 1 ⅛ tbsp")
+        #expect(diff.edits[1] == .scaleIngredient(id: sugar, factor: 1.5))         // same unit → scale
+        #expect(diff.edits[1].summary(in: original) == "More sugar: 2 tbsp → 3 tbsp")
+        #expect(diff.edits[2].summary(in: original) == "Change oil: ¼ cup → 1 tbsp")  // different units → amount change
+        // Vinegar 1 tbsp = 3 tsp (a conversion), scallions equal, salt without an amount: no edit.
         let applied = original.applying(diff.edits)
         #expect(applied.ingredients[2].name == "oil")
         #expect(applied.ingredients[2].quantity == 1)
