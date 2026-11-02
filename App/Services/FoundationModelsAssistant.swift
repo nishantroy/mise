@@ -157,15 +157,54 @@ struct FoundationModelsAssistant: RecipeAssistant {
         try await proposeEdits(recipe: recipe, feedback: feedback, kind: .cooked, prefs: prefs)
     }
 
-    /// "Change recipe" sends the same text, told that it is an instruction, not a report.
+    /// "Change recipe" works differently: see `changeEdits`.
     func proposeEdits(recipe: Recipe, feedback: String, kind: FeedbackKind, prefs: UserPreferences) async throws -> [RecipeEdit] {
-        let analysis = FeedbackParser().analyse(feedback, recipe: recipe)
+        let analysis = FeedbackParser(kind: kind).analyse(feedback, recipe: recipe)
+        guard SystemLanguageModel.default.isAvailable else { return analysis.edits }
+        if kind == .change { return await changeEdits(recipe: recipe, analysis: analysis) }
         let stepEdits = analysis.stepChanges.map(\.edit)
         let hints = analysis.edits.filter { !stepEdits.contains($0) }
-        guard SystemLanguageModel.default.isAvailable,
-              !analysis.otherFeedback.trimmingCharacters(in: .whitespaces).isEmpty else { return analysis.edits }
+        guard !analysis.otherFeedback.trimmingCharacters(in: .whitespaces).isEmpty else { return analysis.edits }
         let ingredientEdits = await modelEdits(recipe: recipe, feedback: analysis.otherFeedback, hints: hints, kind: kind)
         return ingredientEdits + stepEdits.filter { !ingredientEdits.contains($0) }
+    }
+
+    /// At most this many unresolved clauses go to the model, one call each.
+    static let maxLeftovers = 3
+
+    /// "Change recipe": the rules' edits stand (the cook asked for exactly those). Each clause the
+    /// rules could only note (not one the cook asked to note, and not a step note, which goes to
+    /// `proposeStepRewrites`) is sent to the model on its own as an instruction; ingredient edits
+    /// that map onto the recipe, and don't touch an ingredient already changed, replace that note.
+    /// The model's own notes are dropped. What is still a note may become a step rewrite later,
+    /// or the cook chooses.
+    private func changeEdits(recipe: Recipe, analysis: FeedbackParser.Analysis) async -> [RecipeEdit] {
+        var out = analysis.edits
+        for note in analysis.unresolved.filter({ !$0.isStepNote }).prefix(Self.maxLeftovers) {
+            let prompt = Self.editPrompt(recipe: recipe, feedback: note.said, hints: [], kind: .change)
+            do {
+                let plan = try await Self.withTimeout(Self.insightTimeout) {
+                    let session = LanguageModelSession(instructions: Self.changeInstructions)
+                    return try await session.respond(to: prompt, generating: EditPlan.self,
+                                                     options: GenerationOptions(temperature: 0.2)).content
+                }
+                let proposals = plan.edits.map { e in
+                    ProposedEdit(kind: ProposedEdit.Kind(e.kind), ingredient: e.ingredient, replacement: e.replacement,
+                                 factor: e.factor, text: e.text)
+                }
+                let touched = Set(out.flatMap(\.targetIDs))
+                let edits = ProposedEdit.map(proposals, in: recipe, kind: .change).filter { edit in
+                    if case .addNote = edit { return false }
+                    return !out.contains(edit) && touched.isDisjoint(with: edit.targetIDs)
+                }
+                Self.debugLog("proposeEdits (change leftover)", prompt: prompt, output: "\(plan) → \(edits.count) kept")
+                guard !edits.isEmpty, let i = out.firstIndex(of: .addNote(note.note)) else { continue }
+                out.replaceSubrange(i...i, with: edits)
+            } catch {
+                Self.log.error("change leftover kept as a note: \(String(describing: error), privacy: .public)")
+            }
+        }
+        return out
     }
 
     /// Ingredient edits and notes from the model, or `hints` (the rules') on any error.
@@ -373,7 +412,7 @@ struct FoundationModelsAssistant: RecipeAssistant {
     }
 
     func proposeStepRewrites(recipe: Recipe, edits: [RecipeEdit], feedback: String, kind: FeedbackKind) async throws -> [StepRewriteProposal] {
-        let requests = StepRewrites.feedbackRequests(recipe: recipe, edits: edits, feedback: feedback)
+        let requests = StepRewrites.feedbackRequests(recipe: recipe, edits: edits, feedback: feedback, kind: kind)
             + StepRewrites.requests(recipe: recipe, edits: edits)
         guard !requests.isEmpty, SystemLanguageModel.default.isAvailable else { return [] }
         let after = recipe.applying(edits)
@@ -555,10 +594,11 @@ struct FoundationModelsAssistant: RecipeAssistant {
     static let changeInstructions = """
     You update a home cook's saved recipe to make changes they ask for. \
     Their words are instructions for the recipe from now on ("use less oil", "swap the sherry for mirin", "no cilantro"), \
-    or a complaint to fix ("it's usually too salty"); they are not describing a cook. \
+    or a complaint to fix ("it's usually too salty", "the sauce was too thin"), even when written in the past tense \
+    ("used less oil") or as a question ("can we skip the cilantro?"); they want the recipe changed. \
     Propose small, concrete changes using only these kinds: \
     replace (swap one listed ingredient for another), scale (change a listed ingredient's amount by a factor), \
-    remove (drop a listed ingredient), add (a new ingredient), note (a short tip to keep with the recipe). \
+    remove (drop a listed ingredient), add (a new ingredient), note (only if no ingredient change fits). \
     Use ingredient names exactly as listed. Make only the changes asked for. \
     Suggested changes from a simple rule engine are included; keep the good ones, fix wrong ones, and add what they missed.
     """
