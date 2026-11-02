@@ -51,10 +51,8 @@ enum Persistence {
                 try? FileManager.default.removeItem(at: URL(filePath: url.path(percentEncoded: false) + suffix))
             }
         }
-        let schema = Schema(versionedSchema: SchemaV1.self)
-        let config = ModelConfiguration(schema: schema, url: url)
         do {
-            return try ModelContainer(for: schema, migrationPlan: MiseMigrationPlan.self, configurations: config)
+            return try MiseStore.container(url: url)
         } catch {
             fatalError("Could not open the recipe store: \(error)")
         }
@@ -63,10 +61,15 @@ enum Persistence {
     /// In-memory container for previews.
     @MainActor
     static func inMemory() -> ModelContainer {
-        let schema = Schema(versionedSchema: SchemaV1.self)
-        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        return try! ModelContainer(for: schema, migrationPlan: MiseMigrationPlan.self, configurations: config)
+        try! MiseStore.inMemory()
     }
+}
+
+extension CookPhotoStore {
+    /// Cooking photos live in Application Support/Photos (backed up with the app's data; UI tests
+    /// use their own folder, like their own store).
+    static let shared = CookPhotoStore(directory: URL.applicationSupportDirectory
+        .appending(path: LaunchOptions.isUITesting ? "Photos-UITest" : "Photos", directoryHint: .isDirectory))
 }
 
 extension EnvironmentValues {

@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 import RecipeKit
 
-extension SchemaV1 {
+extension SchemaV2 {
     /// Single row holding the user's preferences.
     @Model
     final class UserProfile {

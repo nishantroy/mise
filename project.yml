@@ -105,3 +105,34 @@ targets:
         TEST_TARGET_NAME: Mise
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
+
+  # Model and photo logic, run on the Mac (no simulator): the SwiftData migration from a store
+  # the previous release wrote, the cooking log, and photo sizing/naming/encoding.
+  # `xcodebuild test -scheme MiseModelTests -destination platform=macOS`
+  MiseModelTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: MiseModelTests
+        excludes:
+          - Fixtures
+      - path: MiseModelTests/Fixtures
+        type: folder
+        buildPhase: resources
+      - path: App/Models
+      - path: App/Services/CookPhotoStore.swift
+    dependencies:
+      - package: RecipeKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_BASE).modeltests
+        GENERATE_INFOPLIST_FILE: YES
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+    scheme:
+      testTargets:
+        - MiseModelTests
+      gatherCoverageData: false

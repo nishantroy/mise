@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 import RecipeKit
 
-extension SchemaV1 {
+extension SchemaV2 {
     @Model
     final class PantryEntry {
         /// Catalog ID, or the normalised name for ingredients the catalog doesn't know.
