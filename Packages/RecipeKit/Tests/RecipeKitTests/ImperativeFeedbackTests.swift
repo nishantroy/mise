@@ -52,6 +52,13 @@ struct ImperativeFeedbackTests {
         #expect(analysis.servings == nil)
     }
 
+    @Test func severalInstructionsInOneSentence() throws {
+        let recipe = try StepFixtures.pepperChicken()
+        let analysis = FeedbackParser().analyse("use 2 tbsp oil, no green chillies and cook the chicken 10 min on high", recipe: recipe)
+        #expect(analysis.edits.map { $0.summary(in: recipe) } == ["Change oil: 2 ½ tbsp → 2 tbsp", "Leave out green chillies", Self.pepperStep7High])
+        #expect(analysis.otherFeedback == "use 2 tbsp oil, no green chillies")
+    }
+
     @Test func amountChangeKeepsTheIngredientAndItsSteps() throws {
         let recipe = try StepFixtures.pepperChicken()
         let edits = FeedbackParser.edits(from: "use 2 tbsp oil", recipe: recipe)
