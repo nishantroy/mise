@@ -12,6 +12,7 @@ struct MiseApp: App {
         if LaunchOptions.resetData {
             PendingImports.clear()
             CookSessionStore.clearAll()
+            CookPhotoStore.shared.deleteAll()
         }
         // UI tests: simulate the share extension having queued a URL.
         if let url = LaunchOptions.enqueueImport { PendingImports.append(url) }

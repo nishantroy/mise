@@ -26,6 +26,8 @@
 	<false/>
 	<key>NSAlarmKitUsageDescription</key>
 	<string>Cook mode timers ring like the Clock app, even on silent, and show the countdown on the Lock Screen.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo of what you cooked. It's saved with the recipe on this iPhone.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>LSRequiresIPhoneOS</key>

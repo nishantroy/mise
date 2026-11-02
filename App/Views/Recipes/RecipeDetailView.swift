@@ -35,8 +35,8 @@ struct RecipeDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                if recipe.imageURL != nil {
-                    RecipeImage(url: recipe.imageURL)
+                if recipe.imageURL != nil || saved.latestPhoto != nil {
+                    RecipeImage(url: recipe.imageURL, photoURL: saved.latestPhoto.map(CookPhotoStore.shared.url(for:)))
                         .aspectRatio(16 / 10, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
                 }
@@ -45,6 +45,7 @@ struct RecipeDetailView: View {
                 ingredientsCard
                 stepsCard
                 if !recipe.notes.isEmpty { notesCard }
+                if !saved.cookLog.isEmpty { CookedSection(saved: saved) }
                 historyCard
             }
             .padding(.horizontal, Theme.Spacing.gutter)
@@ -117,6 +118,7 @@ struct RecipeDetailView: View {
         }
         .confirmationDialog("Delete this recipe?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
+                CookLogging.deletePhotos(of: saved)
                 context.delete(saved)
                 try? context.save()
                 dismiss()
@@ -132,7 +134,7 @@ struct RecipeDetailView: View {
         }
         .sheet(isPresented: $showingAdjust, onDismiss: { finishedSwaps = [] }) {
             NavigationStack {
-                AdjustRecipeView(saved: saved, sessionSwaps: finishedSwaps) {
+                AdjustRecipeView(saved: saved, sessionSwaps: finishedSwaps, servingsCooked: servings ?? recipe.servings) {
                     // Logged as cooked: the session is over (its alarms are left alone).
                     CookSessionStore.clear(saved.id)
                     session = nil

@@ -287,11 +287,13 @@ struct RecipeCard: View {
     let title: String
     let imageURL: URL?
     let metadata: String
+    /// The latest cooking photo, shown instead of the web image.
+    var photoURL: URL? = nil
 
     var body: some View {
         MiseCard(padding: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                RecipeImage(url: imageURL)
+                RecipeImage(url: imageURL, photoURL: photoURL)
                     .aspectRatio(16 / 10, contentMode: .fit)
                     .clipped()
                 VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
@@ -309,14 +311,18 @@ struct RecipeCard: View {
     }
 }
 
-/// Async image with the sunken fork-and-knife placeholder.
+/// Async image with the sunken fork-and-knife placeholder. A cooking photo on disk
+/// (`photoURL`) wins over the web image.
 struct RecipeImage: View {
     let url: URL?
+    var photoURL: URL? = nil
 
     var body: some View {
         Color.mise.surfaceSunken
             .overlay {
-                if let url {
+                if let photoURL {
+                    LocalPhoto(url: photoURL) { placeholder }
+                } else if let url {
                     AsyncImage(url: url) { phase in
                         if let image = phase.image {
                             image.resizable().scaledToFill()

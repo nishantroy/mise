@@ -9,6 +9,8 @@ struct AdjustRecipeView: View {
     /// Swaps made in cook mode ("I'm out of X"), offered unticked so the recipe only changes
     /// if the cook chooses.
     var sessionSwaps: [CookSwap] = []
+    /// The servings shown when cooking (logged with the cook).
+    var servingsCooked: Int? = nil
     /// Called after saving.
     var onSaved: () -> Void = {}
 
@@ -28,6 +30,8 @@ struct AdjustRecipeView: View {
     @State private var isRewording = false
     @State private var assistantName = ""
     @State private var keptSwaps: [KeptSwap] = []
+    /// Downscaled in memory; written with the log entry on save.
+    @State private var photo: ProcessedCookPhoto?
 
     /// A cook-mode swap and the edits that would keep it in the saved recipe.
     struct KeptSwap: Identifiable {
@@ -63,6 +67,8 @@ struct AdjustRecipeView: View {
                     }
                 }
 
+                CookPhotoSection(photo: $photo)
+
                 MiseCard {
                     VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                         Text("What did you change?").font(.headline).foregroundStyle(Color.mise.ink)
@@ -88,7 +94,7 @@ struct AdjustRecipeView: View {
 
                 // Wrote up the version you actually made? Diff it against this recipe instead.
                 NavigationLink {
-                    PasteMyVersionView(saved: saved, markCooked: true) { dismiss() }
+                    PasteMyVersionView(saved: saved, markCooked: true, cookPhoto: photo) { dismiss() }
                 } label: {
                     Label("Paste your own version instead", systemImage: "doc.on.clipboard")
                         .font(Theme.Fonts.meta)
@@ -249,12 +255,14 @@ struct AdjustRecipeView: View {
         }
         let summary = edits.isEmpty ? "Cooked it" : "Cooked it: " + edits.summary(in: saved.recipe)
         saved.apply(edits, summary: summary)
-        saved.timesCooked += 1
         if ratingTouched {
             saved.rating = rating == 0 ? nil : rating
         } else if chips.contains("Perfect") {
             saved.rating = 1
         }
+        // Counts the cook (timesCooked) and links the revision just saved.
+        CookLogging.record(saved, photo: photo, rating: saved.rating, feedback: pending,
+                           servings: servingsCooked, revisionID: saved.revisions.last?.id)
         try? context.save()
         onSaved()
         dismiss()

@@ -36,7 +36,8 @@ struct RecipeListView: View {
                             ForEach(recipes) { saved in
                                 NavigationLink(value: saved.id) {
                                     let recipe = saved.recipe
-                                    RecipeCard(title: saved.title, imageURL: recipe.imageURL, metadata: RecipeFormat.metadata(recipe))
+                                    RecipeCard(title: saved.title, imageURL: recipe.imageURL, metadata: RecipeFormat.metadata(recipe),
+                                               photoURL: saved.latestPhoto.map(CookPhotoStore.shared.url(for:)))
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("recipe.card")

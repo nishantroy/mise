@@ -25,6 +25,7 @@ struct SettingsView: View {
                 Section("Weeknight cooking time") { WeeknightEditor(prefs: $prefs).padding(.vertical, Theme.Spacing.xxs) }
                 Section("Household") { HouseholdEditor(prefs: $prefs) }
                 AssistantSettingsSection()
+                PhotoStorageSection()
                 Section {
                     LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "–")
                 } footer: {

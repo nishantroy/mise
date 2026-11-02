@@ -11,6 +11,8 @@ struct PasteMyVersionView: View {
     var initialText: String = ""
     /// Reached from "I made this": saving also counts as a cook.
     var markCooked = false
+    /// A photo added in "I made this" before switching here; logged with the cook.
+    var cookPhoto: ProcessedCookPhoto? = nil
     var onSaved: () -> Void
 
     @Environment(\.modelContext) private var context
@@ -213,7 +215,10 @@ struct PasteMyVersionView: View {
             context.setPantry(key: row.update.key, displayName: row.update.displayName,
                               status: row.update.status == .have ? .have : .missing)
         }
-        if markCooked { saved.timesCooked += 1 }
+        if markCooked {
+            CookLogging.record(saved, photo: cookPhoto, rating: saved.rating, feedback: "",
+                               servings: saved.recipe.servings, revisionID: saved.revisions.last?.id)
+        }
         try? context.save()
         onSaved()
     }
