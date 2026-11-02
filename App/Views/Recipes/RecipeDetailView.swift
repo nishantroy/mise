@@ -25,6 +25,8 @@ struct RecipeDetailView: View {
     @State private var confirmReset = false
     @State private var confirmDelete = false
     @State private var rechecking = false
+    /// A step being reworded from its context menu.
+    @State private var editingStep: StepEditTarget?
 
     private var recipe: Recipe { saved.recipe }
     private var displayed: Recipe {
@@ -311,9 +313,26 @@ struct RecipeDetailView: View {
                             .accessibilityLabel("Step \(index + 1)")
                         Text(step).foregroundStyle(Color.mise.ink).fixedSize(horizontal: false, vertical: true)
                     }
+                    .contentShape(Rectangle())
+                    // Long-press to reword a step; saved as a revision like any other edit.
+                    .contextMenu {
+                        Button("Edit step", systemImage: "pencil") {
+                            editingStep = StepEditTarget(stepIndex: index, original: step, initial: step)
+                        }
+                    }
                     .accessibilityElement(children: .combine)
+                    .accessibilityAction(named: "Edit step") {
+                        editingStep = StepEditTarget(stepIndex: index, original: step, initial: step)
+                    }
                     .accessibilityIdentifier("detail.step")
                 }
+            }
+        }
+        .sheet(item: $editingStep) { target in
+            StepEditSheet(title: "Edit step \(target.stepIndex + 1)", original: target.original, initial: target.initial) { text in
+                guard text != target.original, saved.recipe.steps.indices.contains(target.stepIndex) else { return }
+                saved.apply([.updateStep(index: target.stepIndex, text: text)], summary: "Edited step \(target.stepIndex + 1)")
+                try? context.save()
             }
         }
     }

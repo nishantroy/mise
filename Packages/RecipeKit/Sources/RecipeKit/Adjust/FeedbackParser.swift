@@ -35,10 +35,35 @@ public struct FeedbackParser: Sendable {
     }
 
     public func edits(from feedback: String, recipe: Recipe) -> [RecipeEdit] {
+        analyse(feedback, recipe: recipe).edits
+    }
+
+    /// Feedback split into ingredient edits and notes, and step changes.
+    public struct Analysis: Hashable, Sendable {
+        /// Ingredient edits and notes first, then the step changes' edits (rewrites, removals,
+        /// step-attached notes).
+        public var edits: [RecipeEdit]
+        public var stepChanges: [StepChange]
+        /// The feedback without the clauses that became step changes ("" when all did).
+        public var otherFeedback: String
+    }
+
+    public func analyse(_ feedback: String, recipe: Recipe) -> Analysis {
+        let steps = StepFeedbackParser(catalog: catalog)
+        let links = StepIngredientLinker(catalog: catalog).links(for: recipe)
+        var stepChanges: [StepChange] = []
+        var other: [String] = []
         var edits: [RecipeEdit] = []
-        for sentence in Self.sentences(feedback) {
+        for sentence in StepFeedbackParser.mergingContinuedSentences(Self.sentences(feedback)) {
             var unmatched: [String] = []
-            for clause in Self.clauses(sentence) {
+            var kept: [String] = []
+            for clause in StepFeedbackParser.mergingContinuations(Self.clauses(sentence)) {
+                // Steps first: "cooked the chicken 5 min on high" is about step 7, not the chicken.
+                if let change = steps.change(for: clause, recipe: recipe, links: links) {
+                    add(change, to: &stepChanges, recipe: recipe)
+                    continue
+                }
+                kept.append(clause)
                 let result = parse(clause: clause, recipe: recipe)
                 if !result.consumed {
                     if !Self.isFiller(clause) { unmatched.append(clause) }
@@ -53,8 +78,38 @@ public struct FeedbackParser: Sendable {
                 let note = text.prefix(1).uppercased() + text.dropFirst()
                 if !edits.contains(.addNote(note)) { edits.append(.addNote(note)) }
             }
+            if !kept.isEmpty { other.append(kept.joined(separator: ", ")) }
         }
-        return Self.resolvingConflicts(edits)
+        var all = Self.resolvingConflicts(edits)
+        for change in stepChanges where !all.contains(change.edit) { all.append(change.edit) }
+        return Analysis(edits: all, stepChanges: stepChanges, otherFeedback: other.joined(separator: ". "))
+    }
+
+    /// A second change to a step already rewritten builds on the rewrite; otherwise both are kept
+    /// (a removal wins over a rewrite of the same step).
+    func add(_ change: StepChange, to changes: inout [StepChange], recipe: Recipe) {
+        guard let i = changes.firstIndex(where: { $0.stepIndex == change.stepIndex }) else {
+            changes.append(change)
+            return
+        }
+        let previous = changes[i]
+        switch (previous.outcome, change.outcome) {
+        case (.remove, _):
+            return
+        case (_, .remove):
+            changes[i] = change
+        case let (.rewrite(text), _):
+            var rewritten = recipe
+            rewritten.steps[change.stepIndex] = text
+            if let again = StepFeedbackParser(catalog: catalog).change(for: change.clause, recipe: rewritten), case .rewrite = again.outcome {
+                changes[i] = StepChange(stepIndex: change.stepIndex, outcome: again.outcome,
+                                        clause: previous.clause + "; " + change.clause, wantsModel: false)
+            } else {
+                changes.append(change)
+            }
+        default:
+            changes.append(change)
+        }
     }
 
     /// An explicit replace or remove beats a scale of the same ingredient ("too salty" + "used

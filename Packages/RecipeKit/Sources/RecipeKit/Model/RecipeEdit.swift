@@ -14,6 +14,9 @@ public enum RecipeEdit: Codable, Hashable, Sendable {
     case replaceIngredients(ids: [UUID], with: [Ingredient], reason: String?)
     /// The whole step list replaced by the user's own steps ("Paste my version"). Added after v1.
     case replaceSteps([String])
+    /// One step dropped ("I skipped the blanching"). Added after v1. Its index refers to the steps
+    /// before the edit list: `Recipe.applying` removes steps last, highest index first.
+    case removeStep(index: Int)
 
     /// `reason` on a `replaceIngredient` that only changes the amount (the user's version uses a
     /// different unit, so it can't be a scale). The summary reads "Change X: ¼ cup → 1 tbsp".

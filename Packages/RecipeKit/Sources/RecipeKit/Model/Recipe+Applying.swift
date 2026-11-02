@@ -3,8 +3,11 @@ import Foundation
 extension Recipe {
     /// Applies edits in order and returns the new recipe. Edits that reference missing
     /// ingredients or steps are skipped. Swaps also rewrite step text.
+    /// Step removals run after everything else, highest index first, so every step index in the
+    /// list refers to the steps as they were before it.
     public func applying(_ edits: [RecipeEdit], catalog: IngredientCatalog = .shared) -> Recipe {
         var recipe = self
+        var removals: Set<Int> = []
         for edit in edits {
             switch edit {
             case let .replaceIngredient(id, replacements, reason):
@@ -47,7 +50,12 @@ extension Recipe {
                 }
             case let .replaceSteps(steps):
                 recipe.steps = steps
+            case let .removeStep(index):
+                removals.insert(index)
             }
+        }
+        for index in removals.sorted(by: >) where recipe.steps.indices.contains(index) {
+            recipe.steps.remove(at: index)
         }
         return recipe
     }

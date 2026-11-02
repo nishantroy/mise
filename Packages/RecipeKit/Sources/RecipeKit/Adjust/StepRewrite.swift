@@ -8,6 +8,9 @@ public struct StepRewriteRequest: Hashable, Sendable {
         case added(Ingredient)
         /// The step at `stepIndex` reads awkwardly after replacing `oldNames` with `newName`.
         case replaced(oldNames: [String], newName: String)
+        /// The cook's feedback about the step at `stepIndex` ("did it in the oven at 200°C") that
+        /// the rules couldn't write into the step. `editIndex` is the step-attached note it replaces.
+        case feedback(clause: String)
     }
 
     public var kind: Kind
@@ -21,22 +24,39 @@ public struct StepRewriteRequest: Hashable, Sendable {
     public var removed: [String]
 }
 
-/// A validated rewrite of one step, offered as an extra (unticked) toggle.
+/// A validated rewrite of one step. After an ingredient change it is offered unticked; from the
+/// cook's own feedback about the step (`fromFeedback`) it is ticked, like the feedback's other edits.
 public struct StepRewriteProposal: Hashable, Sendable {
     public var stepIndex: Int
     public var oldText: String
+    /// The new text; empty when the step is removed.
     public var newText: String
     /// Edits (indices into the proposed edits) the new text relies on. If any is unticked, the
     /// rewrite must be left out too.
     public var dependsOn: [Int]
+    /// The feedback it came from ("I only cooked the chicken for 5 minutes on a high flame…").
+    public var reason: String?
+    /// From the cook's feedback about this step (rules or model), rather than tidying after an
+    /// ingredient change.
+    public var fromFeedback: Bool
+    /// A step-attached note (index into the proposed edits) this rewrite replaces.
+    public var replacesEdit: Int?
 
-    public var edit: RecipeEdit { .updateStep(index: stepIndex, text: newText) }
+    public var removesStep: Bool { newText.isEmpty }
 
-    public init(stepIndex: Int, oldText: String, newText: String, dependsOn: [Int]) {
+    public var edit: RecipeEdit {
+        removesStep ? .removeStep(index: stepIndex) : .updateStep(index: stepIndex, text: newText)
+    }
+
+    public init(stepIndex: Int, oldText: String, newText: String, dependsOn: [Int], reason: String? = nil,
+                fromFeedback: Bool = false, replacesEdit: Int? = nil) {
         self.stepIndex = stepIndex
         self.oldText = oldText
         self.newText = newText
         self.dependsOn = dependsOn
+        self.reason = reason
+        self.fromFeedback = fromFeedback
+        self.replacesEdit = replacesEdit
     }
 }
 
@@ -138,6 +158,90 @@ public enum StepRewrites {
         }
         guard !removed.contains(where: { occurrences(of: $0, in: masked) > 0 }) else { return nil }
         return text
+    }
+
+    // MARK: Feedback about a step
+
+    public static let maxFeedbackRequests = 2
+
+    /// Steps the cook's feedback is about that the rules couldn't rewrite (a different method,
+    /// order, or a time the rules couldn't place): one request per step-attached note in `edits`
+    /// (`editIndex` = that note), at most `maxFeedbackRequests`.
+    public static func feedbackRequests(recipe: Recipe, edits: [RecipeEdit], feedback: String,
+                                        catalog: IngredientCatalog = .shared) -> [StepRewriteRequest] {
+        let changes = FeedbackParser(catalog: catalog).analyse(feedback, recipe: recipe).stepChanges
+        var out: [StepRewriteRequest] = []
+        for change in changes where change.wantsModel && out.count < maxFeedbackRequests {
+            guard case .note = change.outcome, let k = edits.firstIndex(of: change.edit),
+                  !out.contains(where: { $0.stepIndex == change.stepIndex }) else { continue }
+            out.append(StepRewriteRequest(kind: .feedback(clause: change.clause), editIndex: k,
+                                          stepIndex: change.stepIndex, required: [], removed: []))
+        }
+        return out
+    }
+
+    /// Validates a model's rewrite for a `.feedback` request against the step as saved. The
+    /// proposal replaces the request's note and is ticked by default (it is the cook's change).
+    public static func feedbackProposal(for request: StepRewriteRequest, text: String, recipe: Recipe,
+                                        catalog: IngredientCatalog = .shared) -> StepRewriteProposal? {
+        guard case let .feedback(clause) = request.kind, let s = request.stepIndex, recipe.steps.indices.contains(s) else { return nil }
+        let original = recipe.steps[s]
+        guard let valid = validateFeedbackRewrite(original: original, rewritten: text, feedback: clause, catalog: catalog) else { return nil }
+        return StepRewriteProposal(stepIndex: s, oldText: original, newText: valid, dependsOn: [], reason: clause,
+                                   fromFeedback: true, replacesEdit: request.editIndex)
+    }
+
+    /// A model's rewrite of a step after feedback about it, tidied, or nil when it fails a check:
+    /// - not empty, one paragraph, different from the original, not a bare ingredient line;
+    /// - length between a third of the original (≥ 12 characters) and 2× + 80 (≤ 600);
+    /// - every number, duration and temperature in it comes from the old step or the feedback;
+    /// - no temperature of the old step is dropped unless the feedback gives one;
+    /// - it names no catalog ingredient that neither the old step nor the feedback names;
+    /// - the step's "Label:" is kept (put back if the model dropped it).
+    public static func validateFeedbackRewrite(original: String, rewritten: String, feedback: String,
+                                               catalog: IngredientCatalog = .shared) -> String? {
+        var text = rewritten.collapsedWhitespace
+        text = Rx.replace("^(?:step\\s*\\d+\\s*[:.)-]\\s*|\\d+\\s*[.)]\\s+)", in: text, with: "")
+        text = text.trimmingCharacters(in: CharacterSet(charactersIn: "\"“”'")).trimmed
+        let base = original.collapsedWhitespace
+        if let label = StepFeedbackParser.label(of: base), StepFeedbackParser.label(of: text) == nil {
+            text = "\(label): \(text)"
+        }
+        guard !text.isEmpty, !rewritten.contains("\n\n"), text != base, !StepStyleParser.isBareIngredientLine(text) else { return nil }
+        guard text.count >= max(12, base.count / 3), text.count <= min(maxLength, base.count * 2 + 80) else { return nil }
+
+        let allowedNumbers = Set(numberTokens(original) + numberTokens(feedback) + durationNumbers(feedback))
+        guard numberTokens(text).allSatisfy(allowedNumbers.contains) else { return nil }
+        let allowedDurations = TimeEstimator.durations(in: original).map(\.minutes) + TimeEstimator.durations(in: feedback).map(\.minutes)
+        for d in TimeEstimator.durations(in: text).map(\.minutes) where !allowedDurations.contains(where: { abs($0 - d) < 0.01 }) {
+            return nil
+        }
+        let newTemps = Set(temperatureTokens(text)), oldTemps = Set(temperatureTokens(original))
+        let feedbackTemps = Set(temperatureTokens(feedback))
+        guard newTemps.isSubset(of: oldTemps.union(feedbackTemps)) else { return nil }
+        guard !feedbackTemps.isEmpty || oldTemps.isSubset(of: newTemps) else { return nil }
+
+        let known = catalogMentions(in: original, catalog: catalog).union(catalogMentions(in: feedback, catalog: catalog))
+        guard catalogMentions(in: text, catalog: catalog).isSubset(of: known) else { return nil }
+        return text
+    }
+
+    /// Digits for number words in the feedback's durations ("five minutes" → "5").
+    static func durationNumbers(_ text: String) -> [String] {
+        StepFeedbackParser.durationSpans(in: text).flatMap { span in
+            [span.lower, span.upper].map { $0 == $0.rounded() ? String(Int($0)) : String($0) }
+        }
+    }
+
+    /// Catalog entries a text names (longest alias first, so "dark soy sauce" isn't also "soy sauce").
+    static func catalogMentions(in text: String, catalog: IngredientCatalog) -> Set<String> {
+        var padded = " " + IngredientCatalog.normalise(text) + " "
+        var ids: Set<String> = []
+        for (alias, id) in catalog.aliases where padded.contains(" \(alias) ") {
+            ids.insert(id)
+            padded = padded.replacingOccurrences(of: " \(alias) ", with: " | ")
+        }
+        return ids
     }
 
     // MARK: Helpers

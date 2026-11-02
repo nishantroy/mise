@@ -28,6 +28,8 @@ struct AdjustRecipeView: View {
     @State private var isThinking = false
     /// Waiting for the model's step rewrites (shown below the edits).
     @State private var isRewording = false
+    /// A proposed step being reworded by hand.
+    @State private var editingStep: StepEditTarget?
     @State private var assistantName = ""
     @State private var keptSwaps: [KeptSwap] = []
     /// Downscaled in memory; written with the log entry on save.
@@ -182,10 +184,22 @@ struct AdjustRecipeView: View {
                         let isOn = Binding(get: { proposals?[index].included ?? false },
                                            set: { proposals?.setIncluded($0, at: index) })
                         if let rewrite = proposal.rewrite {
-                            RewriteToggle(rewrite: rewrite, isOn: isOn, isAvailable: list.isAvailable(proposal),
-                                          identifier: "adjust.rewrite.\(rewrite.stepIndex)")
+                            // Step changes: before/after, tap the text to word it yourself.
+                            StepChangeRow(rewrite: rewrite, isOn: isOn, isAvailable: list.isAvailable(proposal),
+                                          identifier: rewrite.fromFeedback ? "adjust.step.\(rewrite.stepIndex)" : "adjust.rewrite.\(rewrite.stepIndex)") {
+                                editStep(rewrite.stepIndex, proposal: index, current: rewrite.removesStep ? rewrite.oldText : rewrite.newText)
+                            }
                         } else {
                             ProposalToggle(text: proposal.summary, isOn: isOn, identifier: "adjust.edit.\(index)")
+                            if let step = proposal.noteStep {
+                                // The rules (and the model) couldn't write it into the step: do it by hand.
+                                Button("Edit step \(step + 1) instead", systemImage: "pencil") {
+                                    editStep(step, proposal: index, current: nil)
+                                }
+                                .font(Theme.Fonts.meta)
+                                .tint(Color.mise.accent)
+                                .accessibilityIdentifier("adjust.editStep.\(step)")
+                            }
                         }
                     }
                     if isRewording {
@@ -204,6 +218,18 @@ struct AdjustRecipeView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("adjust.proposals")
+        .sheet(item: $editingStep) { target in
+            StepEditSheet(title: "Step \(target.stepIndex + 1)", original: target.original, initial: target.initial) { text in
+                if let index = target.proposalIndex { proposals?.setStepText(text, at: index, original: target.original) }
+            }
+        }
+    }
+
+    /// Opens the step editor for a proposal, starting from its new text (or the saved step).
+    private func editStep(_ step: Int, proposal index: Int, current: String?) {
+        let steps = saved.recipe.steps
+        guard steps.indices.contains(step) else { return }
+        editingStep = StepEditTarget(proposalIndex: index, stepIndex: step, original: steps[step], initial: current ?? steps[step])
     }
 
     // MARK: Actions
@@ -225,20 +251,23 @@ struct AdjustRecipeView: View {
                 edits = (try? await rules.proposeEdits(recipe: recipe, feedback: feedback, prefs: prefs)) ?? []
                 name = rules.displayName
             }
-            let base = edits.map { EditProposal(edit: $0, summary: $0.summary(in: recipe)) }
+            // Step changes from the feedback show a before/after (the rules found the steps).
+            let changes = FeedbackParser().analyse(feedback, recipe: recipe).stepChanges
+            let base = [EditProposal].feedback(edits, recipe: recipe, changes: changes)
             proposals = base
             proposedFor = feedback
             assistantName = name
             isThinking = false
 
             // The model may reword one step per edit (an added ingredient no step mentions, a swap
-            // that reads awkwardly). Offered unticked, after the edits; the rules offer none.
+            // that reads awkwardly; offered unticked, after the edits) and write feedback the rules
+            // could only note into its step (replacing the note, ticked). The rules offer none.
             guard !edits.isEmpty else { return }
             isRewording = true
             let rewrites = (try? await assistant.proposeStepRewrites(recipe: recipe, edits: edits, feedback: feedback)) ?? []
             isRewording = false
             guard proposedFor == feedback, !rewrites.isEmpty, var current = proposals else { return }
-            current += [EditProposal].rewrites(rewrites, dependingOn: base)
+            current.add(rewrites, base: base)
             proposals = current
         }
     }

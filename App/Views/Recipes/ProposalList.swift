@@ -4,13 +4,16 @@ import RecipeKit
 /// A proposed recipe edit the user can untick before saving (adjust and "my version" screens).
 struct EditProposal: Identifiable {
     let id = UUID()
-    let edit: RecipeEdit
-    let summary: String
+    var edit: RecipeEdit
+    var summary: String
     var included = true
-    /// A model's rewrite of one step (old → new), offered unticked.
+    /// A change to one step (old → new): from the cook's feedback (ticked), or a model's
+    /// rewording after an ingredient change (unticked).
     var rewrite: StepRewriteProposal? = nil
     /// Proposals this one relies on; if any is unticked, this one can't be applied.
     var dependsOn: [UUID] = []
+    /// For a note tied to a step ("Step 7 (Chicken): …"): that step, which can be edited by hand instead.
+    var noteStep: Int? = nil
 }
 
 extension Array where Element == EditProposal {
@@ -31,6 +34,45 @@ extension Array where Element == EditProposal {
         guard !on else { return }
         let id = self[index].id
         for i in indices where self[i].dependsOn.contains(id) { self[i].included = false }
+    }
+
+    /// Proposals for the assistant's edits from "I made this" feedback. Step rewrites and removals
+    /// show a before/after and are ticked like the other edits; a note tied to a step remembers it.
+    static func feedback(_ edits: [RecipeEdit], recipe: Recipe, changes: [StepChange]) -> [EditProposal] {
+        edits.map { edit in
+            EditProposal(edit: edit, summary: edit.summary(in: recipe), rewrite: changes.proposal(for: edit, in: recipe),
+                         noteStep: changes.stepIndex(forNote: edit))
+        }
+    }
+
+    /// Adds the model's rewrites. One that turns a step note into a step change takes the note's
+    /// place (ticked, as the cook asked for it); the rest are appended unticked.
+    mutating func add(_ rewrites: [StepRewriteProposal], base: [EditProposal]) {
+        var others: [StepRewriteProposal] = []
+        for rewrite in rewrites {
+            if let k = rewrite.replacesEdit, base.indices.contains(k), let i = firstIndex(where: { $0.id == base[k].id }) {
+                self[i] = EditProposal(edit: rewrite.edit, summary: "Change step \(rewrite.stepIndex + 1)",
+                                       included: self[i].included, rewrite: rewrite)
+            } else {
+                others.append(rewrite)
+            }
+        }
+        self += Self.rewrites(others, dependingOn: base)
+    }
+
+    /// The cook's own wording for the step a proposal is about; it becomes a ticked step change.
+    mutating func setStepText(_ text: String, at index: Int, original: String) {
+        guard indices.contains(index), let step = self[index].rewrite?.stepIndex ?? self[index].noteStep,
+              !text.isEmpty, text != original else { return }
+        var reason = self[index].rewrite?.reason
+        if reason == nil, case let .addNote(note) = self[index].edit { reason = note }
+        let rewrite = StepRewriteProposal(stepIndex: step, oldText: original, newText: text,
+                                          dependsOn: self[index].rewrite?.dependsOn ?? [], reason: reason, fromFeedback: true)
+        self[index].rewrite = rewrite
+        self[index].edit = rewrite.edit
+        self[index].summary = "Change step \(step + 1)"
+        self[index].noteStep = nil
+        self[index].included = true
     }
 
     /// Rewrite proposals mapped onto the edits they depend on (by position in `base`).

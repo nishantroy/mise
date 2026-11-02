@@ -60,6 +60,9 @@ extension RecipeEdit {
             return "Note: \(note)"
         case let .replaceSteps(steps):
             return "Use your steps (\(steps.count) \(steps.count == 1 ? "step" : "steps"))"
+        case let .removeStep(index):
+            let label = recipe.steps.indices.contains(index) ? StepFeedbackParser.label(of: recipe.steps[index]) : nil
+            return "Remove step \(index + 1)\(label.map { " (\($0))" } ?? "")"
         }
     }
 
