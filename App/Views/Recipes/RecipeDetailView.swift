@@ -29,6 +29,11 @@ struct RecipeDetailView: View {
     @State private var rechecking = false
     /// A step being reworded from its context menu.
     @State private var editingStep: StepEditTarget?
+    /// "Share recipe" with a photo: the "Include my photo" sheet.
+    @State private var sharingPhoto: SharePhoto?
+    /// Chosen in that sheet; the share sheet opens once it has closed.
+    @State private var shareAfterDismiss: Bool?
+    @State private var shareError: String?
 
     private var recipe: Recipe { saved.recipe }
     private var displayed: Recipe {
@@ -39,8 +44,9 @@ struct RecipeDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                if recipe.imageURL != nil || saved.latestPhoto != nil {
-                    RecipeImage(url: recipe.imageURL, photoURL: saved.latestPhoto.map(CookPhotoStore.shared.url(for:)))
+                let photoURL = saved.displayPhotoURL(in: .shared)
+                if recipe.imageURL != nil || photoURL != nil {
+                    RecipeImage(url: recipe.imageURL, photoURL: photoURL)
                         .aspectRatio(16 / 10, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
                 }
@@ -96,9 +102,15 @@ struct RecipeDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                Button("Share recipe", systemImage: "square.and.arrow.up") { startSharing() }
+                    .accessibilityIdentifier("detail.share")
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button("Change recipe", systemImage: "pencil.line") { showingChange = true }
                         .accessibilityIdentifier("detail.menu.changeRecipe")
+                    Button("Share recipe", systemImage: "square.and.arrow.up") { startSharing() }
+                        .accessibilityIdentifier("detail.menu.share")
                     Button("Paste my version", systemImage: "doc.on.clipboard") { showingMyVersion = true }
                     if session != nil {
                         Button("I made this", systemImage: "checkmark.circle") {
@@ -136,6 +148,25 @@ struct RecipeDetailView: View {
                 try? context.save()
                 dismiss()
             }
+        }
+        .sheet(item: $sharingPhoto, onDismiss: {
+            if let includePhoto = shareAfterDismiss {
+                shareAfterDismiss = nil
+                share(includePhoto: includePhoto)
+            }
+        }) { photo in
+            NavigationStack {
+                ShareRecipeSheet(title: recipe.title, photoURL: photo.url, photoIsShared: saved.latestPhoto == nil) { includePhoto in
+                    shareAfterDismiss = includePhoto
+                    sharingPhoto = nil
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .alert("Couldn't share this recipe", isPresented: Binding(get: { shareError != nil }, set: { if !$0 { shareError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(shareError ?? "")
         }
         .sheet(isPresented: $showingCheck) {
             NavigationStack {
@@ -256,6 +287,27 @@ struct RecipeDetailView: View {
         self.session = nil
         resuming = nil
         showingCook = true
+    }
+
+    /// With a photo, ask whether to include it first; otherwise straight to the share sheet.
+    private func startSharing() {
+        if let url = RecipeSharing.photoURL(for: saved) {
+            sharingPhoto = SharePhoto(url: url)
+        } else {
+            share(includePhoto: false)
+        }
+    }
+
+    private func share(includePhoto: Bool) {
+        do {
+            let file = try RecipeSharing.makeFile(for: saved, includePhoto: includePhoto)
+            RecipeSharing.present(file: file, recipe: saved.recipe,
+                                  photoURL: includePhoto ? RecipeSharing.photoURL(for: saved) : nil)
+        } catch let failure as SharedRecipeFile.Failure {
+            shareError = failure.message
+        } catch {
+            shareError = error.localizedDescription
+        }
     }
 
     private func setCuisine(_ cuisine: String?) {
