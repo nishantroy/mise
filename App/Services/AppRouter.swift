@@ -41,13 +41,35 @@ final class AppRouter {
     }
 
     private func showNextQueuedImportIfIdle() {
-        guard activeImport == nil, !queuedImports.isEmpty else { return }
-        tab = .recipes
-        let item = queuedImports.removeFirst()
-        presentedShared = item
-        switch item {
-        case .url(let url): activeImport = ImportRequest(url: url)
-        case .text(_, let text): activeImport = ImportRequest(sharedText: text)
+        while activeImport == nil, !queuedImports.isEmpty {
+            let item = queuedImports.removeFirst()
+            let request: ImportRequest
+            switch item {
+            case .url(let url): request = ImportRequest(url: url)
+            case .text(_, let text): request = ImportRequest(sharedText: text)
+            case .recipeFile(let id):
+                // Its file is gone (e.g. cleared): drop the entry and move on.
+                guard let data = PendingImports.recipeFileData(id: id) else {
+                    onSharedImportFinished(item)
+                    continue
+                }
+                request = ImportRequest(sharedRecipeData: data)
+            }
+            tab = .recipes
+            presentedShared = item
+            activeImport = request
+        }
+    }
+
+    /// A `.mise` file opened in Mise (Messages, Mail, Files, AirDrop), cold launch or not. It
+    /// goes through the App Group queue like the share extension's items, so it survives the
+    /// app being killed mid-sheet; without an App Group it's shown straight away.
+    func receiveRecipeFile(_ data: Data, showNow: Bool) {
+        if PendingImports.appendRecipeFile(data) {
+            if showNow { enqueue(PendingImports.pending()) }
+        } else if activeImport == nil {
+            tab = .recipes
+            activeImport = ImportRequest(sharedRecipeData: data)
         }
     }
 
@@ -66,4 +88,6 @@ struct ImportRequest: Identifiable, Hashable {
     var url: URL?
     /// Text shared from another app: the sheet asks whether it's a new recipe or "my version".
     var sharedText: String?
+    /// A `.mise` file's bytes: the sheet previews the friend's recipe.
+    var sharedRecipeData: Data?
 }

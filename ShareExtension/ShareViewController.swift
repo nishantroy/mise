@@ -58,6 +58,16 @@ final class ShareViewController: UIViewController {
         started = true
         let providers = (extensionContext?.inputItems as? [NSExtensionItem] ?? []).flatMap { $0.attachments ?? [] }
         Task { @MainActor in
+            // A `.mise` file a friend sent: copied into the App Group and queued, so the app
+            // shows the same preview as when the file is opened in Mise directly.
+            if let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(Self.recipeFileType) }) {
+                if let data = await Self.loadRecipeFile(provider), PendingImports.appendRecipeFile(data) {
+                    finish(message: "Saved. Open Mise to see the shared recipe.")
+                } else {
+                    finish(message: "Couldn't save this recipe file.")
+                }
+                return
+            }
             switch await Self.sharedItem(in: providers) {
             case .url(let url)?:
                 PendingImports.append(url)
@@ -65,8 +75,24 @@ final class ShareViewController: UIViewController {
             case .text(_, let text)?:
                 PendingImports.appendText(text)
                 finish(message: "Saved. Open Mise to add it as a recipe or as your version of one.")
-            case nil:
+            case .recipeFile?, nil:
                 finish(message: "There's nothing to save here.")
+            }
+        }
+    }
+
+    /// `SharedRecipeFile.typeIdentifier` (declared in the app's Info.plist).
+    static let recipeFileType = "com.nishantroy.mise.recipe"
+
+    /// The file's bytes, if it's small enough to be a recipe (`IncomingRecipeFiles.maxBytes`).
+    private static func loadRecipeFile(_ provider: NSItemProvider) async -> Data? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadDataRepresentation(forTypeIdentifier: recipeFileType) { data, _ in
+                guard let data, data.count <= IncomingRecipeFiles.maxBytes else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: data)
             }
         }
     }

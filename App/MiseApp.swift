@@ -39,12 +39,28 @@ struct MiseApp: App {
 /// Onboarding until it's done, then the tabs.
 struct RootView: View {
     @Query private var profiles: [UserProfile]
+    @Environment(AppRouter.self) private var router
 
     var body: some View {
-        if profiles.first?.onboardingDone == true {
-            MainTabView()
-        } else {
-            OnboardingFlow()
+        Group {
+            if profiles.first?.onboardingDone == true {
+                MainTabView()
+            } else {
+                OnboardingFlow()
+            }
+        }
+        // A `.mise` file opened from Messages, Mail, Files or AirDrop. Here rather than on the
+        // tabs so a cold launch (or one into onboarding) doesn't drop it: it's queued, and the
+        // tabs show it when they appear.
+        .onOpenURL { url in
+            guard url.isFileURL else { return }
+            let showNow = profiles.first?.onboardingDone == true
+            do {
+                router.receiveRecipeFile(try IncomingRecipeFiles.readOpened(url), showNow: showNow)
+            } catch {
+                // Unreadable or too big: the preview explains it isn't a recipe it can open.
+                if showNow, router.activeImport == nil { router.activeImport = ImportRequest(sharedRecipeData: Data()) }
+            }
         }
     }
 }
@@ -74,7 +90,12 @@ struct MainTabView: View {
         }
         .sheet(item: $router.activeImport, onDismiss: { router.importSheetDismissed() }) { request in
             NavigationStack {
-                if let text = request.sharedText {
+                if let data = request.sharedRecipeData {
+                    SharedRecipePreview(data: data) { saved in
+                        router.activeImport = nil
+                        if let saved { router.open(recipeID: saved.id) }
+                    }
+                } else if let text = request.sharedText {
                     SharedTextView(text: text) { saved in
                         router.activeImport = nil
                         if let saved { router.open(recipeID: saved.id) }

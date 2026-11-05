@@ -122,6 +122,8 @@ targets:
         buildPhase: resources
       - path: App/Models
       - path: App/Services/CookPhotoStore.swift
+      # The share queue and `.mise` file intake (opened files, cold launch included).
+      - path: App/Services/PendingImports.swift
     dependencies:
       - package: RecipeKit
     settings:

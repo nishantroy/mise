@@ -8,7 +8,14 @@ struct IngredientCheckView: View {
     let recipe: Recipe
     /// Nil when importing; the saved recipe when re-checking from the detail screen.
     let existing: SavedRecipe?
+    /// Importing a recipe a friend shared (`.mise`): the first revision says so, and their
+    /// photo (if any) becomes the card image.
+    var shared: SharedImport? = nil
     var onSaved: (SavedRecipe) -> Void
+
+    struct SharedImport {
+        var photo: ProcessedCookPhoto?
+    }
 
     @Environment(\.modelContext) private var context
     @Environment(AssistantProvider.self) private var provider
@@ -295,9 +302,14 @@ struct IngredientCheckView: View {
             onSaved(existing)
         } else {
             let current = recipe.applying(edits)
-            let summary = edits.isEmpty ? "Imported" : "Imported: " + edits.summary(in: recipe)
+            let lead = shared == nil ? "Imported" : "Shared with you"
+            let summary = edits.isEmpty ? lead : "\(lead): " + edits.summary(in: recipe)
+            // The original is what was imported (for a shared recipe, the friend's version), so
+            // "Reset to original" returns to it.
             let saved = SavedRecipe(original: recipe, current: current,
                                     revisions: [RecipeRevision(summary: summary, edits: edits)])
+            // If the photo can't be written, the recipe is still saved, without it.
+            if let photo = shared?.photo { _ = try? CookPhotoStore.shared.writeShared(photo, recipeID: saved.id) }
             context.insert(saved)
             try? context.save()
             onSaved(saved)
