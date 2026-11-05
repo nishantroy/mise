@@ -68,8 +68,19 @@ extension SchemaV2.SavedRecipe {
     /// The most recent cooking photo, shown instead of the web image.
     var latestPhoto: String? { cookLog.last(where: { $0.photo != nil })?.photo }
 
-    /// Every photo file this recipe refers to.
+    /// Every photo file this recipe's cooking log refers to.
     var photoNames: [String] { cookLog.compactMap(\.photo) }
+
+    /// The log's photos plus the names a shared photo (from a `.mise` file) may have: for
+    /// deleting the recipe, and for keeping those files when orphans are cleaned up.
+    var allPhotoNames: [String] { photoNames + CookPhotoNaming.sharedPhotoCandidates(recipeID: id) }
+
+    /// The photo for cards and the detail header: the latest cooking photo, else the photo a
+    /// friend shared with the recipe.
+    func displayPhotoURL(in store: CookPhotoStore) -> URL? {
+        if let latest = latestPhoto { return store.url(for: latest) }
+        return store.sharedPhoto(recipeID: id).map(store.url(for:))
+    }
 
     /// The revision saved with an entry.
     func revision(for entry: CookLogEntry) -> RecipeRevision? {

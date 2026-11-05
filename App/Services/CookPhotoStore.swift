@@ -42,6 +42,20 @@ enum CookPhotoNaming {
         return ext.isEmpty ? stem + thumbnailSuffix : "\(stem)\(thumbnailSuffix).\(ext)"
     }
 
+    /// A photo that came with a shared recipe (`.mise` file): "shared-<recipe uuid>.heic". Not a
+    /// cooking-log entry (the receiver didn't cook it); found by the recipe's ID, so it needs no
+    /// stored property (no schema change). Shown until the receiver logs a photo of their own.
+    static let sharedPrefix = "shared-"
+
+    static func sharedPhotoName(recipeID: UUID, fileExtension: String) -> String {
+        "\(sharedPrefix)\(recipeID.uuidString).\(fileExtension)"
+    }
+
+    /// Every name a recipe's shared photo can have (HEIC, or JPEG where HEIC can't be encoded).
+    static func sharedPhotoCandidates(recipeID: UUID) -> [String] {
+        ["heic", "jpg"].map { sharedPhotoName(recipeID: recipeID, fileExtension: $0) }
+    }
+
     static func isThumbnail(_ name: String) -> Bool {
         URL(filePath: name).deletingPathExtension().lastPathComponent.hasSuffix(thumbnailSuffix)
     }
@@ -145,6 +159,23 @@ struct CookPhotoStore: Sendable {
         try processed.photo.write(to: url(for: name), options: .atomic)
         try processed.thumbnail.write(to: thumbnailURL(for: name), options: .atomic)
         return name
+    }
+
+    /// Writes the photo that came with a shared recipe (see `CookPhotoNaming.sharedPrefix`).
+    @discardableResult
+    func writeShared(_ processed: ProcessedCookPhoto, recipeID: UUID) throws -> String {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let name = CookPhotoNaming.sharedPhotoName(recipeID: recipeID, fileExtension: processed.fileExtension)
+        try processed.photo.write(to: url(for: name), options: .atomic)
+        try processed.thumbnail.write(to: thumbnailURL(for: name), options: .atomic)
+        return name
+    }
+
+    /// The shared photo's file name, if this recipe has one on disk.
+    func sharedPhoto(recipeID: UUID) -> String? {
+        CookPhotoNaming.sharedPhotoCandidates(recipeID: recipeID).first {
+            FileManager.default.fileExists(atPath: url(for: $0).path(percentEncoded: false))
+        }
     }
 
     /// Deletes a photo and its thumbnail (missing files are fine).

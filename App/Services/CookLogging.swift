@@ -25,7 +25,7 @@ enum CookLogging {
 
     /// Before deleting a recipe: its photo files go too.
     static func deletePhotos(of saved: SavedRecipe, store: CookPhotoStore = .shared) {
-        store.delete(saved.photoNames)
+        store.delete(saved.allPhotoNames)
     }
 
     static func deleteEntry(_ id: UUID, of saved: SavedRecipe, store: CookPhotoStore = .shared) {
@@ -49,7 +49,7 @@ enum CookLogging {
             }
         }
         try? context.save()
-        let referenced = Set(recipes.flatMap(\.photoNames))
+        let referenced = Set(recipes.flatMap(\.allPhotoNames))
         deleted += store.removeOrphans(referenced: referenced) / 2
         return deleted
     }
