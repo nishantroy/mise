@@ -45,6 +45,10 @@ targets:
         # Target presets would otherwise override the project-level value with "1,2".
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_FILE: App/Info.plist
+        # App Group, plus iCloud (CloudKit container iCloud.com.nishantroy.mise) and push
+        # (aps-environment, for CloudKit's silent sync pushes). Info.plist adds the
+        # remote-notification background mode. App target only: the share extension and widgets
+        # stay local (the extension writes to the App Group queue).
         CODE_SIGN_ENTITLEMENTS: App/Mise.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor

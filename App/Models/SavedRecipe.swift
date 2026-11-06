@@ -2,23 +2,24 @@ import Foundation
 import SwiftData
 import RecipeKit
 
-extension SchemaV2 {
+extension SchemaV3 {
     @Model
     final class SavedRecipe {
-        var id: UUID
-        var createdAt: Date
-        var updatedAt: Date
+        // Every stored property is optional or has a default (CloudKit's rule; see `SchemaV3`).
+        var id: UUID = UUID()
+        var createdAt: Date = Date.distantPast
+        var updatedAt: Date = Date.distantPast
         /// Denormalised for list sorting and search.
-        var title: String
+        var title: String = ""
         /// JSON-encoded `Recipe` (current version).
-        var recipeData: Data
+        var recipeData: Data = Data()
         /// JSON-encoded `Recipe` as imported, for "Reset to original".
-        var originalData: Data
+        var originalData: Data = Data()
         /// JSON-encoded `[RecipeRevision]`.
-        var revisionsData: Data
+        var revisionsData: Data = Data()
         /// -1, 0 or 1.
         var rating: Int?
-        var timesCooked: Int
+        var timesCooked: Int = 0
         /// JSON-encoded `[CookLogEntry]` (`cookLog`); nil until the first logged cook. Added in V2.
         var cookLogData: Data?
 

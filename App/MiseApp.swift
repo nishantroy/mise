@@ -1,10 +1,12 @@
 import SwiftUI
 import SwiftData
 import RecipeKit
+import os
 
 @main
 struct MiseApp: App {
-    @State private var container = Persistence.makeContainer()
+    @State private var container = Persistence.opened.container
+    @State private var cloudSync = CloudSync(container: Persistence.opened.container, mode: Persistence.opened.mode)
     @State private var assistantProvider = AssistantProvider()
     @State private var router = AppRouter()
 
@@ -13,6 +15,20 @@ struct MiseApp: App {
             PendingImports.clear()
             CookSessionStore.clearAll()
             CookPhotoStore.shared.deleteAll()
+            try? FileManager.default.removeItem(at: CookPhotoStore.legacyDirectory)
+        }
+        // Photos from before V3 were files; move them into the store (so they sync). Idempotent,
+        // and off the main thread; photo views retry when it posts.
+        Task.detached(priority: .utility) {
+            let store = CookPhotoStore.shared
+            do {
+                if try store.importLegacyFiles(from: CookPhotoStore.legacyDirectory) > 0 {
+                    await MainActor.run { NotificationCenter.default.post(name: CookPhotoStore.photosChanged, object: nil) }
+                }
+            } catch {
+                Logger(subsystem: "Mise", category: "CookLog")
+                    .error("Photo import failed, files kept: \(error.localizedDescription, privacy: .public)")
+            }
         }
         // UI tests: simulate the share extension having queued a URL.
         if let url = LaunchOptions.enqueueImport { PendingImports.append(url) }
@@ -24,6 +40,7 @@ struct MiseApp: App {
             RootView()
                 .environment(assistantProvider)
                 .environment(router)
+                .environment(cloudSync)
                 .environment(\.recipeFetcher, Self.fetcher)
                 .miseTheme()
         }
@@ -70,6 +87,7 @@ struct MainTabView: View {
     @Environment(AssistantProvider.self) private var provider
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var context
+    @Environment(CloudSync.self) private var cloudSync
 
     var body: some View {
         @Bindable var router = router
@@ -81,6 +99,9 @@ struct MainTabView: View {
         .onChange(of: scenePhase, initial: true) { _, phase in
             guard phase == .active else { return }
             provider.refresh()
+            // iCloud: account status for Settings, and merge duplicates synced in meanwhile.
+            cloudSync.refreshAccount()
+            cloudSync.dedupe()
             // Once per launch: estimates computed from older steps or rules → the rules' for now.
             EstimateRefresh.sweep(context)
             // Pick up links and text shared from other apps. Each stays in the App Group queue
