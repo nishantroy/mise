@@ -24,12 +24,13 @@ struct SettingsView: View {
                 Section("Cuisines you cook") { CuisineEditor(prefs: $prefs).padding(.vertical, Theme.Spacing.xxs) }
                 Section("Weeknight cooking time") { WeeknightEditor(prefs: $prefs).padding(.vertical, Theme.Spacing.xxs) }
                 Section("Household") { HouseholdEditor(prefs: $prefs) }
+                SyncStatusSection()
                 AssistantSettingsSection()
                 PhotoStorageSection()
                 Section {
                     LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "–")
                 } footer: {
-                    Text("Everything stays on this iPhone.")
+                    Text("Nothing leaves this iPhone except through your own iCloud account.")
                 }
             }
             .listRowBackground(Color.mise.surface)
@@ -53,11 +54,13 @@ struct SettingsView: View {
     SettingsView()
         .modelContainer(PreviewData.container)
         .environment(AssistantProvider())
+        .environment(CloudSync(container: PreviewData.container, mode: .local(reason: nil)))
 }
 
 #Preview("Dark") {
     SettingsView()
         .modelContainer(PreviewData.container)
         .environment(AssistantProvider())
+        .environment(CloudSync(container: PreviewData.container, mode: .local(reason: nil)))
         .preferredColorScheme(.dark)
 }

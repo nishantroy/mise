@@ -19,8 +19,10 @@ enum RecipeSharing {
     nonisolated static let photoLongEdge = 1200
 
     /// The photo that would be shared: the latest cooking photo, else one a friend shared.
+    /// The cached file, written from the store if needed; nil if the photo isn't on this device.
     static func photoURL(for saved: SavedRecipe, store: CookPhotoStore = .shared) -> URL? {
-        saved.displayPhotoURL(in: store)
+        guard let url = saved.displayPhotoURL(in: store), store.ensureCached(url) else { return nil }
+        return url
     }
 
     /// Writes "<Title>.mise" into a fresh temporary folder and returns its URL.
