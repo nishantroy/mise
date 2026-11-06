@@ -7,14 +7,14 @@ import SwiftData
 enum CookLogging {
     private static let log = Logger(subsystem: "Mise", category: "CookLog")
 
-    /// Logs a cook (counted in `timesCooked`). The photo is written first; if that fails the entry
+    /// Logs a cook (counted in `timesCooked`). The photo is stored first; if that fails the entry
     /// is still logged, without it. The caller saves the context.
     static func record(_ saved: SavedRecipe, photo: ProcessedCookPhoto?, rating: Int?, feedback: String,
                        servings: Int?, revisionID: UUID?, date: Date = .now, store: CookPhotoStore = .shared) {
         var name: String?
         if let photo {
             do {
-                name = try store.write(photo)
+                name = try store.write(photo, recipeID: saved.id)
             } catch {
                 log.error("Couldn't write the cooking photo: \(error.localizedDescription, privacy: .public)")
             }
@@ -50,7 +50,7 @@ enum CookLogging {
         }
         try? context.save()
         let referenced = Set(recipes.flatMap(\.allPhotoNames))
-        deleted += store.removeOrphans(referenced: referenced) / 2
+        deleted += store.removeOrphans(referenced: referenced)
         return deleted
     }
 }

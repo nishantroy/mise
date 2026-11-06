@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import ImageIO
+import SwiftData
 import Testing
 import UniformTypeIdentifiers
 
@@ -48,28 +49,72 @@ struct CookPhotoTests {
 
     // MARK: Store
 
+    /// A store over an in-memory database and a temporary cache folder.
+    static func makeStore() throws -> CookPhotoStore {
+        CookPhotoStore(container: try MiseStore.inMemory(),
+                       directory: FileManager.default.temporaryDirectory
+                           .appending(path: "MisePhotos-\(UUID().uuidString)", directoryHint: .isDirectory))
+    }
+
     @Test func storeWritesCountsAndCleansUp() throws {
-        let store = CookPhotoStore(directory: FileManager.default.temporaryDirectory
-            .appending(path: "MisePhotos-\(UUID().uuidString)", directoryHint: .isDirectory))
+        let store = try Self.makeStore()
         defer { store.deleteAll() }
         #expect(store.usage().photos == 0)
         let processed = ProcessedCookPhoto(photo: Data(count: 1000), thumbnail: Data(count: 100),
                                            fileExtension: "heic", pixelWidth: 1, pixelHeight: 1)
         let a = try store.write(processed)
         let b = try store.write(processed)
-        #expect(Set(store.fileNames()) == [a, b, CookPhotoNaming.thumbnailName(for: a), CookPhotoNaming.thumbnailName(for: b)])
+        // In the store (synced); the cache has the photo and thumbnail for display.
+        #expect(Set(store.photoNames()) == [a, b])
+        #expect(store.data(for: a) == processed.photo)
+        #expect(Set(store.cachedFileNames()) == [a, b, CookPhotoNaming.thumbnailName(for: a), CookPhotoNaming.thumbnailName(for: b)])
         #expect(store.usage().photos == 2)
-        #expect(store.usage().bytes == 2200)
+        #expect(store.usage().bytes == 2000)
 
-        #expect(store.removeOrphans(referenced: [a]) == 2)
-        #expect(store.usage().photos == 1)
+        // New photos aren't orphans yet (their log entry may still be syncing)…
+        #expect(store.removeOrphans(referenced: [a]) == 0)
+        // …an hour later they are.
+        #expect(store.removeOrphans(referenced: [a], now: Date().addingTimeInterval(3601)) == 1)
+        #expect(store.photoNames() == [a])
+        #expect(Set(store.cachedFileNames()) == [a, CookPhotoNaming.thumbnailName(for: a)])
         store.delete(a)
-        #expect(store.fileNames().isEmpty)
+        #expect(store.photoNames().isEmpty)
+        #expect(store.cachedFileNames().isEmpty)
         store.delete("missing.heic")   // fine
 
         _ = try store.write(processed)
         store.deleteAll()
         #expect(store.usage().photos == 0)
+    }
+
+    /// Another device's photo arrives as a row only: the cache is filled from the store, the
+    /// thumbnail derived here.
+    @Test func cacheIsFilledFromTheStoreAndThumbnailsAreDerived() throws {
+        let store = try Self.makeStore()
+        defer { store.deleteAll() }
+        let processed = try #require(CookPhotoProcessor.process(try Self.cameraPhoto(grain: 0)))
+        let context = ModelContext(store.container)
+        context.insert(CookPhoto(name: "synced.heic", recipeID: nil, data: processed.photo))
+        try context.save()
+
+        #expect(store.cachedFileNames().isEmpty)
+        #expect(store.ensureCached(store.thumbnailURL(for: "synced.heic")))
+        #expect(try Data(contentsOf: store.url(for: "synced.heic")) == processed.photo)
+        let thumb = try Data(contentsOf: store.thumbnailURL(for: "synced.heic"))
+        let source = try #require(CGImageSourceCreateWithData(thumb as CFData, nil))
+        let props = try #require(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+        #expect(props[kCGImagePropertyPixelWidth] as? Int == 400)
+        #expect(thumb.count < 40_000)
+        // Not stored (deleted, or not synced yet): nothing to show.
+        #expect(!store.ensureCached(store.url(for: "elsewhere.heic")))
+    }
+
+    @Test func thumbnailNamesRoundTrip() {
+        #expect(CookPhotoNaming.photoName(forThumbnail: CookPhotoNaming.thumbnailName(for: "A.heic")) == "A.heic")
+        #expect(CookPhotoNaming.photoName(forThumbnail: "B-thumb.jpg") == "B.jpg")
+        let id = UUID()
+        #expect(CookPhotoNaming.sharedRecipeID(CookPhotoNaming.sharedPhotoName(recipeID: id, fileExtension: "heic")) == id)
+        #expect(CookPhotoNaming.sharedRecipeID("A.heic") == nil)
     }
 
     // MARK: Processing a 12 MP photo

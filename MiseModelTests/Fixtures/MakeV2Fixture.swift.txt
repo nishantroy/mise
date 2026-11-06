@@ -1,0 +1,59 @@
+import Foundation
+import SwiftData
+import RecipeKit
+
+// Writes V2Sample.store with the 1.0 (2) release's model code (main at afba3f0), unmodified.
+let out = URL(filePath: CommandLine.arguments[1])
+for suffix in ["", "-shm", "-wal"] { try? FileManager.default.removeItem(atPath: out.path + suffix) }
+
+let beefID = UUID(uuidString: "B0000000-0000-0000-0000-000000000001")!
+let dalID = UUID(uuidString: "D0000000-0000-0000-0000-000000000002")!
+let rev1 = UUID(uuidString: "E0000000-0000-0000-0000-000000000001")!
+let rev2 = UUID(uuidString: "E0000000-0000-0000-0000-000000000002")!
+
+do {
+    let container = try MiseStore.container(url: out)
+    let context = ModelContext(container)
+
+    let beefOriginal = Recipe(title: "Mongolian Beef", sourceURL: URL(string: "https://example.com/beef"), servings: 4,
+                              cuisine: "Chinese",
+                              ingredients: [Ingredient(raw: "500 g flank steak", quantity: 500, unit: "g", name: "flank steak"),
+                                            Ingredient(raw: "3 tbsp soy sauce", quantity: 3, unit: "tbsp", name: "soy sauce")],
+                              steps: ["Slice the beef.", "Fry it hot."])
+    var beefCurrent = beefOriginal
+    beefCurrent.notes = ["Use less soy sauce"]
+    let beef = SavedRecipe(original: beefOriginal, current: beefCurrent,
+                           revisions: [RecipeRevision(id: rev1, date: Date(timeIntervalSince1970: 1_780_000_000), summary: "Imported", edits: []),
+                                       RecipeRevision(id: rev2, date: Date(timeIntervalSince1970: 1_781_000_000), summary: "Cooked it: Note added", edits: [])],
+                           now: Date(timeIntervalSince1970: 1_780_000_000))
+    beef.id = beefID
+    beef.updatedAt = Date(timeIntervalSince1970: 1_781_000_000)
+    beef.rating = 1
+    beef.timesCooked = 2   // cooked twice before the log existed
+    beef.recordCook(CookLogEntry(id: UUID(uuidString: "C0000000-0000-0000-0000-000000000001")!,
+                                 date: Date(timeIntervalSince1970: 1_781_000_000), rating: 1, feedback: "Great, less salty",
+                                 revisionID: rev2, servings: 2, photo: "A0000000-0000-0000-0000-000000000001.heic"))
+    beef.recordCook(CookLogEntry(id: UUID(uuidString: "C0000000-0000-0000-0000-000000000002")!,
+                                 date: Date(timeIntervalSince1970: 1_782_000_000), rating: nil, feedback: "",
+                                 revisionID: nil, servings: nil, photo: nil))
+    context.insert(beef)
+
+    let dal = SavedRecipe(original: Recipe(title: "Shared Dal", ingredients: [Ingredient(raw: "1 cup lentils", quantity: 1, unit: "cup", name: "lentils")],
+                                           steps: ["Simmer the lentils."]),
+                          revisions: [RecipeRevision(date: Date(timeIntervalSince1970: 1_783_000_000), summary: "Shared with you", edits: [])],
+                          now: Date(timeIntervalSince1970: 1_783_000_000))
+    dal.id = dalID
+    dal.rating = -1
+    context.insert(dal)
+
+    context.insert(PantryEntry(key: "shaoxing-wine", displayName: "Shaoxing wine", status: .missing,
+                               updatedAt: Date(timeIntervalSince1970: 1_781_500_000)))
+    context.insert(PantryEntry(key: "garlic", displayName: "garlic", status: .have,
+                               updatedAt: Date(timeIntervalSince1970: 1_781_600_000)))
+    context.insert(UserProfile(prefs: UserPreferences(diet: .pescatarian, avoid: [.pork], dislikes: ["cilantro"],
+                                                      spiceLevel: 3, cuisines: ["Chinese", "Indian"],
+                                                      weeknightMinutes: 45, servings: 3),
+                               onboardingDone: true))
+    try context.save()
+}
+print("wrote \(out.path)")

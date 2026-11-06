@@ -88,7 +88,7 @@ struct SharedRecipeTests {
     // MARK: Shared photo
 
     @Test func sharedPhotoIsTheCardImageUntilACookPhotoIsLogged() throws {
-        let store = CookPhotoStore(directory: try Self.tempDirectory())
+        let store = try CookPhotoTests.makeStore()
         defer { store.deleteAll() }
         let saved = SavedRecipe(original: Self.recipe, revisions: [RecipeRevision(summary: "Shared with you", edits: [])])
         #expect(saved.displayPhotoURL(in: store) == nil)
@@ -103,7 +103,7 @@ struct SharedRecipeTests {
         #expect(saved.timesCooked == 0)
 
         // Orphan clean-up keeps it (and its thumbnail) while the recipe refers to it.
-        #expect(store.removeOrphans(referenced: Set(saved.allPhotoNames)) == 0)
+        #expect(store.removeOrphans(referenced: Set(saved.allPhotoNames), now: Date().addingTimeInterval(7200)) == 0)
         #expect(store.usage().photos == 1)
 
         saved.recordCook(CookLogEntry(photo: "mine.heic"))
@@ -111,7 +111,8 @@ struct SharedRecipeTests {
 
         // Deleting the recipe deletes it (CookLogging.deletePhotos uses allPhotoNames).
         store.delete(saved.allPhotoNames)
-        #expect(store.fileNames().isEmpty)
+        #expect(store.photoNames().isEmpty)
+        #expect(store.cachedFileNames().isEmpty)
     }
 
     @Test func receivedCookPhotoFitsAndIsReEncodedOnReceive() throws {

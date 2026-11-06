@@ -8,8 +8,12 @@ struct PantryView: View {
     @State private var draft = ""
     @State private var draftStatus: PantryStatus = .have
 
-    private var have: [PantryEntry] { entries.filter { $0.pantryStatus == .have } }
-    private var missing: [PantryEntry] { entries.filter { $0.pantryStatus == .missing } }
+    /// One row per ingredient, even before a synced duplicate has been merged away.
+    private var unique: [PantryEntry] {
+        entries.newestPerKey.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+    }
+    private var have: [PantryEntry] { unique.filter { $0.pantryStatus == .have } }
+    private var missing: [PantryEntry] { unique.filter { $0.pantryStatus == .missing } }
 
     var body: some View {
         NavigationStack {
@@ -88,7 +92,7 @@ struct PantryView: View {
         }
         .accessibilityActions {
             Button(has ? "Move to Missing" : "Move to Have") { toggle(entry) }
-            Button("Delete") { context.delete(entry); try? context.save() }
+            Button("Delete") { context.removePantry(key: entry.key); try? context.save() }
         }
     }
 
