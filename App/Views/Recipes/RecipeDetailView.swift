@@ -34,6 +34,13 @@ struct RecipeDetailView: View {
     /// Chosen in that sheet; the share sheet opens once it has closed.
     @State private var shareAfterDismiss: Bool?
     @State private var shareError: String?
+    /// "Find a substitute" (tap or long-press an ingredient): the swap options sheet.
+    @State private var substituting: Ingredient?
+    /// "Leave it out" from the context menu: straight to "Just this time" / "Update the recipe".
+    @State private var leaveOutChoice: SubstituteChoice?
+    /// The last "Update the recipe" swap, for Undo, and the confirmation line.
+    @State private var lastSwap: AppliedRecipeSwap?
+    @State private var toast: String?
 
     private var recipe: Recipe { saved.recipe }
     private var displayed: Recipe {
@@ -52,6 +59,9 @@ struct RecipeDetailView: View {
                 }
                 titleBlock
                 if recipe.servings != nil { servingsCard }
+                if let session, session.isSwapsOnly {
+                    PlannedSwapsCard(swaps: session.swaps, onRemove: removePlannedSwap)
+                }
                 ingredientsCard
                 stepsCard
                 // Below the recipe it changes; the bottom bar stays "Start cooking" / "I made this".
@@ -70,15 +80,38 @@ struct RecipeDetailView: View {
         }
         .miseScreenBackground()
         .safeAreaInset(edge: .bottom) {
-            // Side by side; stacked when large text doesn't fit.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: Theme.Spacing.s) { bottomActions }
-                VStack(spacing: Theme.Spacing.xs) { bottomActions }
+            VStack(spacing: Theme.Spacing.s) {
+                if let toast {
+                    SwapToast(message: toast, onUndo: lastSwap.map { applied in { undoRecipeSwap(applied) } })
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                // Side by side; stacked when large text doesn't fit.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: Theme.Spacing.s) { bottomActions }
+                    VStack(spacing: Theme.Spacing.xs) { bottomActions }
+                }
             }
             .padding(.horizontal, Theme.Spacing.gutter)
             .padding(.vertical, Theme.Spacing.s)
             .background(Color.mise.background)
         }
+        // The confirmation goes away by itself after a few seconds (and with it, Undo).
+        .task(id: toast) {
+            guard toast != nil else { return }
+            try? await Task.sleep(for: .seconds(6))
+            withAnimation {
+                toast = nil
+                lastSwap = nil
+            }
+        }
+        .sheet(item: $substituting) { ingredient in
+            FindSubstituteSheet(ingredient: ingredient, recipe: displayed, cookInProgress: cookInProgress) { choice, decision in
+                substituting = nil
+                decide(choice, decision)
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .substituteDecision($leaveOutChoice, cookInProgress: cookInProgress) { choice, decision in decide(choice, decision) }
         .fullScreenCover(isPresented: $showingCook, onDismiss: {
             loadSession()
             // "Done" in cook mode leads into "I made this".
@@ -112,9 +145,9 @@ struct RecipeDetailView: View {
                     Button("Share recipe", systemImage: "square.and.arrow.up") { startSharing() }
                         .accessibilityIdentifier("detail.menu.share")
                     Button("Paste my version", systemImage: "doc.on.clipboard") { showingMyVersion = true }
-                    if session != nil {
+                    if let session, !session.isSwapsOnly {
                         Button("I made this", systemImage: "checkmark.circle") {
-                            finishedSwaps = session?.swaps ?? []
+                            finishedSwaps = session.swaps
                             showingAdjust = true
                         }
                     }
@@ -204,9 +237,10 @@ struct RecipeDetailView: View {
 
     /// "Start cooking" (cook mode, at the servings chosen above) and "I made this"; or, with a
     /// session to pick up, "Resume cooking (step 7)" and "Start over".
+    /// A swaps-only session ("Swap ready for your next cook") keeps "Start cooking" / "I made this".
     @ViewBuilder
     private var bottomActions: some View {
-        if let session {
+        if let session, !session.isSwapsOnly {
             Button { resume(session) } label: {
                 Label(session.page == 0 ? "Resume cooking" : "Resume cooking (step \(session.page))", systemImage: "frying.pan")
                     .fixedSize(horizontal: true, vertical: false)
@@ -225,16 +259,17 @@ struct RecipeDetailView: View {
 
     @ViewBuilder
     private var startButtons: some View {
-        Button {
-            resuming = nil
-            showingCook = true
-        } label: {
+        Button { startCooking() } label: {
             Label("Start cooking", systemImage: "frying.pan").fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.misePrimary)
         .disabled(recipe.steps.isEmpty)
         .accessibilityIdentifier("detail.startCooking")
-        Button { showingAdjust = true } label: {
+        Button {
+            // Cooked without cook mode: swaps set up "just this time" are offered as in cook mode.
+            finishedSwaps = session?.swaps ?? []
+            showingAdjust = true
+        } label: {
             Text("I made this").fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.miseSecondaryTall)
@@ -272,6 +307,171 @@ struct RecipeDetailView: View {
 
     private func loadSession() {
         session = CookSessionStore.resumable(for: saved.id, recipe: saved.recipe)
+    }
+
+    /// "Start cooking": fresh, or with the swaps set up "just this time" (at the servings shown now).
+    private func startCooking() {
+        if let session, session.isSwapsOnly {
+            let ready = session.rescaled(to: displayed.servings, base: recipe)
+            CookSessionStore.save(ready)
+            self.session = ready
+            resuming = ready
+        } else {
+            resuming = nil
+        }
+        showingCook = true
+    }
+
+    // MARK: Find a substitute
+
+    /// A cook that has actually started (not just swaps set up ahead).
+    private var cookInProgress: Bool { session.map { !$0.isSwapsOnly } ?? false }
+
+    /// "Next cook: ginger and garlic" under an ingredient with a swap in the session.
+    private func sessionSwapLine(for ingredient: Ingredient) -> String? {
+        guard let session, let swap = session.swap(for: ingredient.id) else { return nil }
+        let lead = session.isSwapsOnly ? "Next cook" : "This cook"
+        return swap.isSkip ? "\(lead): leaving it out" : "\(lead): \(swap.newName)"
+    }
+
+    @ViewBuilder
+    private func ingredientMenu(_ ingredient: Ingredient) -> some View {
+        Button("Find a substitute", systemImage: "arrow.triangle.swap") { substituting = ingredient }
+        Button("Leave it out", systemImage: "minus.circle") { leaveOut(ingredient) }
+        if let swap = session?.swap(for: ingredient.id) {
+            Button(cookInProgress ? "Undo swap for this cook" : "Remove swap for next cook", systemImage: "arrow.uturn.backward") {
+                removePlannedSwap(swap)
+            }
+        }
+    }
+
+    private func leaveOut(_ ingredient: Ingredient) {
+        leaveOutChoice = SubstituteChoice(ingredient: ingredient, suggestion: nil, consequence: SkipConsequence.text(for: ingredient))
+    }
+
+    private func decide(_ choice: SubstituteChoice, _ decision: SubstituteDecision) {
+        switch decision {
+        case .justThisTime: swapForNextCook(choice)
+        case .updateRecipe: swapInRecipe(choice)
+        }
+    }
+
+    /// Marks the ingredient missing in the pantry (as cook mode does); returns the key and what it said before.
+    private func markMissing(_ ingredient: Ingredient) -> (key: String, before: String?) {
+        let key = IngredientCatalog.shared.pantryKey(for: ingredient)
+        let before = context.pantryStatus(key: key)?.rawValue
+        context.setPantry(key: key, displayName: ingredient.name, status: .missing)
+        return (key, before)
+    }
+
+    private func restorePantry(key: String?, before: String?, name: String) {
+        guard let key else { return }
+        if let status = before.flatMap(PantryStatus.init(rawValue:)) {
+            context.setPantry(key: key, displayName: name, status: status)
+        } else {
+            context.removePantry(key: key)
+        }
+    }
+
+    /// "Just this time": the swap goes into the cook session (a new one for the next cook, or the
+    /// one in progress), the same mechanism as cook mode's "Out of something?".
+    private func swapForNextCook(_ choice: SubstituteChoice) {
+        let base = recipe
+        var current = session ?? CookSession.planned(recipeID: saved.id, base: base, servings: displayed.servings)
+        if current.isSwapsOnly { current = current.rescaled(to: displayed.servings, base: base) }
+        let previous = current.swap(for: choice.ingredient.id)
+        guard var (next, swap) = current.settingSwap(of: choice.ingredient.id, suggestion: choice.suggestion,
+                                                    consequence: choice.consequence, base: base) else { return }
+        if let previous {
+            swap.pantryKey = previous.pantryKey
+            swap.pantryBefore = previous.pantryBefore
+            context.setPantry(key: previous.pantryKey ?? IngredientCatalog.shared.pantryKey(for: choice.ingredient),
+                              displayName: choice.ingredient.name, status: .missing)
+        } else {
+            let marked = markMissing(choice.ingredient)
+            swap.pantryKey = marked.key
+            swap.pantryBefore = marked.before
+        }
+        try? context.save()
+        next.swaps[next.swaps.count - 1] = swap
+        // A ticked prep item that now needs something different is unticked (as in cook mode).
+        if !swap.isSkip, let plan = next.plan {
+            let covering = Set(plan.itemIDs(covering: choice.ingredient.id))
+            next.checkedPrep.removeAll { covering.contains($0) }
+        }
+        CookSessionStore.save(next)
+        withAnimation {
+            session = next
+            lastSwap = nil
+            toast = next.isSwapsOnly ? "Ready for your next cook: \(swap.label)" : "Added to your cook: \(swap.label)"
+        }
+    }
+
+    /// Removes a swap set up "just this time" (or undoes one in a cook in progress) and puts the
+    /// pantry back.
+    private func removePlannedSwap(_ swap: CookSwap) {
+        guard let session else { return }
+        let next = session.removingSwap(swap.id)
+        restorePantry(key: swap.pantryKey, before: swap.pantryBefore, name: swap.original.name)
+        try? context.save()
+        if next.hasProgress {
+            CookSessionStore.save(next)
+            withAnimation { self.session = next }
+        } else {
+            CookSessionStore.clear(saved.id)
+            withAnimation { self.session = nil }
+        }
+    }
+
+    /// "Update the recipe": the same edits as keeping a cook-mode swap (amounts at the recipe's own
+    /// servings, steps renamed / rescaled / collapsed), saved as a revision "Swapped X for Y".
+    private func swapInRecipe(_ choice: SubstituteChoice) {
+        let before = recipe
+        let edits = RecipeSwap.edits(for: choice.ingredient.id, suggestion: choice.suggestion, in: before)
+        guard !edits.isEmpty else { return }
+        let summary = RecipeSwap.summary(of: edits, in: before)
+        let sessionBefore = session
+        saved.apply(edits, summary: summary)
+        let marked = markMissing(choice.ingredient)
+        try? context.save()
+        // Swaps set up for the next cook carry over to the edited recipe (other ingredients only).
+        if let old = sessionBefore, old.isSwapsOnly {
+            var carried = CookSession.planned(recipeID: saved.id, base: saved.recipe, servings: old.servings)
+            for swap in old.swaps where swap.original.id != choice.ingredient.id {
+                guard var (next, moved) = carried.settingSwap(of: swap.original.id, suggestion: swap.suggestion,
+                                                             consequence: swap.consequence, base: saved.recipe) else { continue }
+                moved.id = swap.id
+                moved.pantryKey = swap.pantryKey
+                moved.pantryBefore = swap.pantryBefore
+                next.swaps[next.swaps.count - 1] = moved
+                carried = next
+            }
+            if carried.hasProgress { CookSessionStore.save(carried) } else { CookSessionStore.clear(saved.id) }
+        }
+        loadSession()
+        withAnimation {
+            lastSwap = AppliedRecipeSwap(revisionID: saved.revisions.last?.id, before: before, session: sessionBefore,
+                                         pantryKey: marked.key, pantryBefore: marked.before, name: choice.ingredient.name)
+            toast = summary
+        }
+    }
+
+    /// Undo for "Update the recipe": only while that revision is still the latest.
+    private func undoRecipeSwap(_ applied: AppliedRecipeSwap) {
+        if let id = applied.revisionID, saved.revisions.last?.id == id {
+            saved.recipe = applied.before
+            var revisions = saved.revisions
+            revisions.removeLast()
+            saved.revisions = revisions
+            restorePantry(key: applied.pantryKey, before: applied.pantryBefore, name: applied.name)
+            try? context.save()
+            if let old = applied.session { CookSessionStore.save(old) }
+            loadSession()
+        }
+        withAnimation {
+            lastSwap = nil
+            toast = nil
+        }
     }
 
     /// Opens cook mode where the session left off, at its servings.
@@ -348,22 +548,44 @@ struct RecipeDetailView: View {
         SectionCard(title: "Ingredients") {
             VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                 ForEach(displayed.ingredients) { ing in
-                    HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.s) {
-                        Text(RecipeFormat.amount(ing) ?? "")
-                            .monospacedDigit()
-                            .foregroundStyle(Color.mise.ink)
-                            .frame(minWidth: 72, alignment: .leading)
-                            .fontWeight(.semibold)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(RecipeFormat.capitalised(ing.name)).foregroundStyle(Color.mise.ink)
-                            if let note = ing.note {
-                                Text(note).font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
+                    // Tap: the swap options for this ingredient. Long-press: the same, or leave it out.
+                    Button { substituting = ing } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.s) {
+                            Text(RecipeFormat.amount(ing) ?? "")
+                                .monospacedDigit()
+                                .foregroundStyle(Color.mise.ink)
+                                .frame(minWidth: 72, alignment: .leading)
+                                .fontWeight(.semibold)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(RecipeFormat.capitalised(ing.name)).foregroundStyle(Color.mise.ink)
+                                if let note = ing.note {
+                                    Text(note).font(Theme.Fonts.meta).foregroundStyle(Color.mise.inkSecondary)
+                                }
+                                if let line = sessionSwapLine(for: ing) {
+                                    Label(line, systemImage: "arrow.triangle.swap")
+                                        .font(Theme.Fonts.meta)
+                                        .foregroundStyle(Color.mise.herb)
+                                }
                             }
+                            Spacer(minLength: 0)
                         }
+                        .multilineTextAlignment(.leading)
+                        .frame(minHeight: Theme.Size.minTap - Theme.Spacing.s)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .contextMenu { ingredientMenu(ing) }
                     .accessibilityElement(children: .combine)
+                    .accessibilityHint("Find a substitute")
+                    .accessibilityAction(named: "Find a substitute") { substituting = ing }
+                    .accessibilityAction(named: "Leave it out") { leaveOut(ing) }
                     .accessibilityIdentifier("detail.ingredient")
                 }
+                // Low-key hint so the tap is discoverable without a button on every row.
+                Label("Tap an ingredient to find a substitute", systemImage: "arrow.triangle.swap")
+                    .font(Theme.Fonts.caption)
+                    .foregroundStyle(Color.mise.inkSecondary)
+                    .accessibilityHidden(true)
             }
         }
     }
