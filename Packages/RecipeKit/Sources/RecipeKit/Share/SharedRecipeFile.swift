@@ -184,34 +184,63 @@ public struct SharedRecipeFile: Codable, Sendable, Equatable {
     /// steps, notes, source link and "Made with Mise".
     public var plainText: String { Self.plainText(for: recipe) }
 
-    public static func plainText(for recipe: Recipe) -> String {
-        var lines: [String] = [recipe.title.trimmed]
+    /// The recipe as text to paste into Messages or Notes: ingredients and prep as tick-off
+    /// lists, prep (from the rule-based `PrepPlanner`) before the steps, steps spaced out.
+    public static func plainText(for recipe: Recipe, planner: PrepPlanner = PrepPlanner()) -> String {
+        var blocks: [[String]] = []
+
+        var header = [recipe.title.trimmed]
         var meta: [String] = []
         if let servings = recipe.servings, servings > 0 { meta.append("Serves \(servings)") }
         if let time = recipe.displayTime { meta.append((time.isEstimate ? "~" : "") + duration(time.minutes)) }
         if let cuisine = recipe.cuisine?.trimmed, !cuisine.isEmpty { meta.append(cuisine) }
-        if !meta.isEmpty { lines.append(meta.joined(separator: " · ")) }
+        if !meta.isEmpty { header.append(meta.joined(separator: " · ")) }
+        blocks.append(header)
 
         if !recipe.ingredients.isEmpty {
-            lines += ["", "Ingredients"]
-            for ingredient in recipe.ingredients {
+            blocks.append(["INGREDIENTS"] + recipe.ingredients.map { ingredient in
                 var line = ingredient.displayText
                 if let note = ingredient.note?.trimmed, !note.isEmpty { line += ", \(note)" }
-                lines.append("• \(line)")
-            }
+                return "☐ \(line)"
+            })
         }
+
+        let prep = prepLines(recipe, plan: planner.plan(for: recipe))
+        if !prep.isEmpty { blocks.append(["PREP FIRST"] + prep) }
+
         if !recipe.steps.isEmpty {
-            lines += ["", "Steps"]
-            for (index, step) in recipe.steps.enumerated() { lines.append("\(index + 1). \(step.trimmed)") }
+            // A blank line between steps, so each reads as its own instruction.
+            let steps = recipe.steps.enumerated().map { "\($0.offset + 1). \($0.element.trimmed)" }
+            blocks.append(["STEPS"] + steps.flatMap { [$0, ""] }.dropLast())
         }
         if !recipe.notes.isEmpty {
-            lines += ["", "Notes"]
-            for note in recipe.notes { lines.append("• \(note.trimmed)") }
+            blocks.append(["NOTES"] + recipe.notes.map { "• \($0.trimmed)" })
         }
-        lines.append("")
-        if let source = recipe.sourceURL { lines.append("Source: \(source.absoluteString)") }
-        lines.append("Made with Mise")
-        return lines.joined(separator: "\n")
+
+        var footer: [String] = []
+        if let source = recipe.sourceURL { footer.append("Source: \(source.absoluteString)") }
+        footer.append("Made with Mise")
+        blocks.append(footer)
+
+        return blocks.map { $0.joined(separator: "\n") }.joined(separator: "\n\n")
+    }
+
+    /// "Start early" first (marked, with its time), then chopping and mixing. "Get out" is left
+    /// out: the ingredient list already says what to get.
+    static func prepLines(_ recipe: Recipe, plan: PrepPlan) -> [String] {
+        plan.groups.filter { $0.kind != .getOut }.flatMap { group in
+            group.items.map { item in
+                var text = item.text(in: recipe)
+                if group.kind == .startEarly {
+                    // "Start early: marinate …", keeping capitals that start a name ("PB&J").
+                    let rest = text.dropFirst()
+                    if let first = text.first, rest.first?.isUppercase != true { text = first.lowercased() + rest }
+                    text = "Start early: " + text
+                    if let minutes = item.minutes { text += " (\(duration(minutes)))" }
+                }
+                return "☐ \(text)"
+            }
+        }
     }
 
     static func duration(_ minutes: Int) -> String {

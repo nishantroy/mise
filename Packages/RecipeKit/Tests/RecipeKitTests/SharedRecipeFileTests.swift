@@ -175,16 +175,20 @@ struct SharedRecipeFileTests {
         Pepper Chicken
         Serves 4 · 35 min · Indian
 
-        Ingredients
-        • 500 g chicken thighs, boneless
-        • 2 tbsp oil
-        • salt
+        INGREDIENTS
+        ☐ 500 g chicken thighs, boneless
+        ☐ 2 tbsp oil
+        ☐ salt
 
-        Steps
+        PREP FIRST
+        ☐ Start early: marinate the chicken (30 min)
+
+        STEPS
         1. Marinate the chicken for 30 minutes.
+
         2. Fry on high for 10 minutes.
 
-        Notes
+        NOTES
         • Use more pepper than you think.
 
         Source: https://example.com/pepper-chicken
@@ -192,8 +196,29 @@ struct SharedRecipeFileTests {
         """)
     }
 
+    @Test func plainTextPrepListsChoppingAndMixing() {
+        let recipe = Recipe(title: "Stir Fry", servings: 2, ingredients: [
+            Ingredient(raw: "1 onion", quantity: 1, name: "onion", note: "thinly sliced"),
+            Ingredient(raw: "2 cloves garlic", quantity: 2, unit: "cloves", name: "garlic", note: "minced"),
+            Ingredient(raw: "2 tbsp soy sauce", quantity: 2, unit: "tbsp", name: "soy sauce"),
+            Ingredient(raw: "1 tbsp honey", quantity: 1, unit: "tbsp", name: "honey"),
+            Ingredient(raw: "300 g beef", quantity: 300, unit: "g", name: "beef"),
+        ], steps: ["Mix the soy sauce and honey in a small bowl.", "Marinate the beef in half the sauce for 20 minutes.",
+                   "Heat a wok and fry the onion and garlic for 2 minutes.", "Add the beef and the rest of the sauce; cook 5 minutes."])
+        let text = SharedRecipeFile.plainText(for: recipe)
+        #expect(text.contains("""
+        PREP FIRST
+        ☐ Start early: marinate the beef (20 min)
+        ☐ Thinly slice 1 onion
+        ☐ Mince 2 cloves garlic
+        ☐ Mix 2 tbsp soy sauce and 1 tbsp honey
+
+        STEPS
+        """))
+    }
+
     @Test func plainTextWithoutOptionalParts() {
         let text = SharedRecipeFile.plainText(for: Recipe(title: "Toast", steps: ["Toast the bread."]))
-        #expect(text == "Toast\n\nSteps\n1. Toast the bread.\n\nMade with Mise")
+        #expect(text == "Toast\n\nSTEPS\n1. Toast the bread.\n\nMade with Mise")
     }
 }

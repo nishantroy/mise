@@ -19,6 +19,13 @@ struct ShareRecipeSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var includePhoto = true
 
+    private var caption: String {
+        let opens = RecipeSharing.getMiseURL == nil
+            ? "Friends with Mise can open the file and save the recipe."
+            : "Friends with Mise can open the file and save the recipe; others get a link to get Mise."
+        return opens + " To send the recipe as text, choose Copy in the share sheet. Your pantry, history, cooking log and ratings aren't included."
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
@@ -43,7 +50,7 @@ struct ShareRecipeSheet: View {
                     .tint(Color.mise.accent)
                     .accessibilityIdentifier("shareRecipe.includePhoto")
                 }
-                Text("Friends with Mise can open the file and save the recipe. Others get it as text in Messages or Mail. Your pantry, history, cooking log and ratings aren't included.")
+                Text(caption)
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(Color.mise.inkSecondary)
             }

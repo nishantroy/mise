@@ -5,18 +5,28 @@ import UIKit
 import UniformTypeIdentifiers
 import RecipeKit
 
-/// Sending a recipe to a friend: a `.mise` file plus a plain-text copy for people without Mise.
+/// Sending a recipe to a friend: a `.mise` file, or the recipe as plain text through Copy.
 ///
-/// UIActivityViewController with two items rather than `ShareLink` + one `Transferable`: a
-/// share destination takes one representation of a `Transferable`, so Messages would get either
-/// the file or the text, never both. Two items give Messages and Mail the text *and* the file
-/// attachment; AirDrop and Save to Files get only the file; Copy gets only the text.
+/// UIActivityViewController with two items rather than `ShareLink` + one `Transferable`, so each
+/// destination gets what suits it: Copy gets only the recipe text; Messages, Mail and the like get
+/// the file plus one line with a link to get Mise; AirDrop and Save to Files get only the file.
 @MainActor
 enum RecipeSharing {
     /// The photo is re-encoded until it fits this (the format accepts up to
     /// `SharedRecipeFile.maxPhotoBytes`).
     nonisolated static let photoTargetBytes = 300_000
     nonisolated static let photoLongEdge = 1200
+
+    /// Where a friend without Mise goes to get it: the public TestFlight invite for now, the App
+    /// Store page once Mise is published. While nil, Messages and Mail get the file alone.
+    // TODO: set to the public TestFlight link (App Store Connect → TestFlight → external group).
+    nonisolated static let getMiseURL: URL? = nil
+
+    /// The line sent with the file to Messages, Mail and the like; nil without a link.
+    nonisolated static func inviteLine(title: String) -> String? {
+        guard let url = getMiseURL else { return nil }
+        return "Open “\(title)” in Mise. Don't have it? Get Mise: \(url.absoluteString)"
+    }
 
     /// The photo that would be shared: the latest cooking photo, else one a friend shared.
     /// The cached file, written from the store if needed; nil if the photo isn't on this device.
@@ -70,7 +80,8 @@ enum RecipeSharing {
         }
         let items: [Any] = [
             RecipeFileItem(url: file, title: recipe.title, image: image),
-            RecipeTextItem(text: SharedRecipeFile.plainText(for: recipe)),
+            RecipeTextItem(recipeText: SharedRecipeFile.plainText(for: recipe),
+                           inviteLine: inviteLine(title: recipe.title)),
         ]
         let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
         controller.excludedActivityTypes = [.assignToContact, .addToReadingList, .openInIBooks, .postToFacebook,
@@ -130,23 +141,29 @@ final class RecipeFileItem: NSObject, UIActivityItemSource {
     }
 }
 
-/// The readable copy: Messages and Mail send it with the file; AirDrop and Save to Files don't
-/// (the receiver would get a stray text file or note).
+/// The text beside the file. Copy gets the whole recipe as text (the file isn't copied); Messages,
+/// Mail and the like get one line with a link to get Mise, not the whole recipe; AirDrop and
+/// Save to Files get nothing (the receiver would get a stray text file or note).
 final class RecipeTextItem: NSObject, UIActivityItemSource {
-    let text: String
+    let recipeText: String
+    let inviteLine: String?
     static let fileOnly: Set<String> = [
         UIActivity.ActivityType.airDrop.rawValue,
         "com.apple.DocumentManagerUICore.SaveToFiles",
         "com.apple.CloudDocsUI.AddToiCloudDrive",
     ]
 
-    init(text: String) { self.text = text }
+    init(recipeText: String, inviteLine: String?) {
+        self.recipeText = recipeText
+        self.inviteLine = inviteLine
+    }
 
     func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any { "" }
 
     func activityViewController(_ activityViewController: UIActivityViewController,
                                 itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
-        guard let activityType else { return text }
-        return Self.fileOnly.contains(activityType.rawValue) ? nil : text
+        guard let activityType else { return inviteLine }
+        if activityType == .copyToPasteboard { return recipeText }
+        return Self.fileOnly.contains(activityType.rawValue) ? nil : inviteLine
     }
 }
