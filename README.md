@@ -78,7 +78,7 @@ The project ships with placeholders: `DEVELOPMENT_TEAM` empty, `BUNDLE_ID_BASE =
 6. In App Store Connect → TestFlight, wait for processing. The export compliance question is already answered by `ITSAppUsesNonExemptEncryption = NO` in both Info.plists.
 7. Internal testing: add yourself and install through the TestFlight app. For friends without App Store Connect access, create an External group, add their emails or make a public link, and submit the build for Beta App Review (usually about a day the first time).
 
-The app icon is a placeholder (terracotta with a serif "M"). Replace `App/Assets.xcassets/AppIcon.appiconset/AppIcon.png` (1024×1024, no transparency) before a wider release.
+The app icon is a wooden tasting spoon of tomato soup on a cobalt background. Its source is `design/appicon.svg`; the exported `App/Assets.xcassets/AppIcon.appiconset/AppIcon.png` is 1024×1024 with no transparency.
 
 ## Privacy
 

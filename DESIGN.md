@@ -57,9 +57,9 @@ Set the app's global tint to `accent`. Paint `background` behind every scroll vi
 - **Pantry:** sections for Have and Missing, each a card listing items, with swipe to move or delete.
 - **Settings:** a system `Form` is fine here, with `background` behind it and `accent` tint.
 
-## App icon (placeholder)
+## App icon
 
-A terracotta (`#C2410C`) background with a cream (`#FAF6EF`) simple glyph, such as a bowl or a whisk, or a serif "M".
+A wooden tasting spoon holding tomato soup, with steam, on a cobalt gradient (`#2F66C2` → `#173C7C`). The source is `design/appicon.svg`. It replaced the first placeholder, a cream serif "M" on terracotta.
 
 ## Previews
 
